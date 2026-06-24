@@ -3,8 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Models\BankAccount;
-use App\Models\MaintenancePlan;
 use App\Models\Service;
+use App\Models\ServiceFeature;
 use App\Models\Setting;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -17,13 +17,16 @@ class CatalogController extends Controller
             'services' => Service::orderBy('sort_order')->get()->map(fn (Service $s) => [
                 'id' => $s->id, 'key' => $s->key, 'name' => $s->name, 'category' => $s->category,
                 'base_price' => \App\Support\Money::pesos($s->base_price_cents),
+                'base_maintenance' => \App\Support\Money::pesos($s->base_maintenance_cents),
                 'per_page' => \App\Support\Money::pesos($s->per_page_price_cents),
                 'per_language' => \App\Support\Money::pesos($s->per_language_price_cents),
                 'included_pages' => $s->included_pages, 'is_active' => $s->is_active,
             ]),
-            'plans' => MaintenancePlan::orderBy('sort_order')->get()->map(fn (MaintenancePlan $p) => [
-                'id' => $p->id, 'name' => $p->name, 'monthly' => \App\Support\Money::pesos($p->monthly_price_cents),
-                'included' => $p->included, 'is_active' => $p->is_active,
+            'functions' => ServiceFeature::orderBy('category')->orderBy('sort_order')->get()->map(fn (ServiceFeature $f) => [
+                'id' => $f->id, 'name' => $f->name, 'category' => $f->category,
+                'build' => \App\Support\Money::pesos($f->price_cents),
+                'maintenance' => \App\Support\Money::pesos($f->maintenance_cents),
+                'applies_to' => $f->applies_to, 'is_active' => $f->is_active,
             ]),
             'banks' => BankAccount::orderBy('sort_order')->get(['id', 'label', 'bank', 'beneficiary', 'account_number', 'clabe', 'is_default', 'is_active']),
             'settings' => [
@@ -38,12 +41,14 @@ class CatalogController extends Controller
     public function updateService(Request $request, Service $service)
     {
         $data = $request->validate([
-            'base_price' => 'required|numeric|min:0', 'per_page' => 'nullable|numeric|min:0',
+            'base_price' => 'required|numeric|min:0', 'base_maintenance' => 'nullable|numeric|min:0',
+            'per_page' => 'nullable|numeric|min:0',
             'per_language' => 'nullable|numeric|min:0', 'included_pages' => 'nullable|integer|min:1',
             'is_active' => 'boolean',
         ]);
         $service->update([
             'base_price_cents' => \App\Support\Money::toCents($data['base_price']),
+            'base_maintenance_cents' => \App\Support\Money::toCents($data['base_maintenance'] ?? 0),
             'per_page_price_cents' => \App\Support\Money::toCents($data['per_page'] ?? 0),
             'per_language_price_cents' => \App\Support\Money::toCents($data['per_language'] ?? 0),
             'included_pages' => $data['included_pages'] ?? $service->included_pages,

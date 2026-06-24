@@ -68,11 +68,13 @@ class LeadController extends Controller
             ]),
             'project' => $lead->project ? ['uuid' => $lead->project->uuid, 'name' => $lead->project->name, 'status' => $lead->project->status->value] : null,
             'options' => [
-                'services' => Service::where('is_active', true)->orderBy('sort_order')->get(['id', 'key', 'name', 'base_price_cents']),
-                'features' => ServiceFeature::where('is_active', true)->orderBy('sort_order')->get(['id', 'name', 'price_cents']),
-                'plans' => MaintenancePlan::where('is_active', true)->orderBy('sort_order')->get(['id', 'name', 'monthly_price_cents']),
+                'services' => Service::where('is_active', true)->orderBy('sort_order')
+                    ->get(['id', 'key', 'name', 'base_price_cents', 'base_maintenance_cents', 'included_pages', 'per_page_price_cents', 'per_language_price_cents']),
+                'features' => ServiceFeature::where('is_active', true)->orderBy('category')->orderBy('sort_order')
+                    ->get(['id', 'name', 'category', 'price_cents', 'maintenance_cents', 'applies_to']),
                 'stages' => collect(LeadStage::cases())->map(fn ($s) => ['value' => $s->value, 'label' => $s->label()]),
                 'banks' => BankAccount::where('is_active', true)->count(),
+                'service_key' => $lead->service?->key,
             ],
         ]);
     }

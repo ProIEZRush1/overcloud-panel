@@ -38,6 +38,12 @@ class PaymentController extends Controller
     {
         $service->verify($payment, $request->user()->id);
 
+        try {
+            app(\App\Services\CrmSync::class)->syncPaymentVerified($payment);
+        } catch (\Throwable $e) {
+            report($e);
+        }
+
         return back()->with('success', 'Pago verificado. El proyecto puede iniciar. 🚀');
     }
 

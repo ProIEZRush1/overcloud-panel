@@ -25,20 +25,26 @@ class QuoteBuilder
         $pages = $opts['pages'] ?? $lead->pages ?? $service->included_pages;
         $languages = $opts['languages'] ?? max(1, count($lead->languages ?? ['es']));
 
-        $depositPercent = (int) (Setting::get('default_deposit_percent', 50));
-        $plan = $lead->maintenancePlan ?? $service->defaultMaintenancePlan ?? MaintenancePlan::where('key', 'estandar')->first();
+        $depositPercent = (int) Setting::get('default_deposit_percent', 50);
+
+        $features = ServiceFeature::whereIn('id', $opts['feature_ids'] ?? [])->get();
+
+        // Maintenance scales with complexity: the platform's base maintenance plus
+        // each selected function's monthly maintenance. No fixed plans.
+        $maintenance = (int) $service->base_maintenance_cents + (int) $features->sum('maintenance_cents');
 
         $quote = Quote::create([
             'lead_id' => $lead->id,
             'spec_id' => $spec?->id ?? $lead->latestSpec?->id,
-            'maintenance_plan_id' => $plan?->id,
+            'maintenance_plan_id' => null,
             'number' => $this->nextNumber(),
             'currency' => 'MXN',
             'deposit_percent' => $depositPercent,
-            'maintenance_monthly_cents' => $plan?->monthly_price_cents ?? 0,
+            'maintenance_monthly_cents' => $maintenance,
             'status' => QuoteStatus::Draft,
             'valid_until' => now()->addDays((int) Setting::get('quote_valid_days', 15)),
-            'terms' => 'Anticipo del '.$depositPercent.'% para iniciar; el resto contra entrega. Precios en MXN.',
+            'terms' => 'Anticipo del '.$depositPercent.'% para iniciar; el resto contra entrega. '
+                .'El mantenimiento mensual es opcional y se calcula según las funciones incluidas. Precios en MXN.',
         ]);
 
         // Main service line.
@@ -50,8 +56,8 @@ class QuoteBuilder
             'unit_price_cents' => $service->priceForCents($pages, $languages),
         ]);
 
-        // Add-ons.
-        foreach (ServiceFeature::whereIn('id', $opts['feature_ids'] ?? [])->get() as $feature) {
+        // Functions / features.
+        foreach ($features as $feature) {
             $quote->items()->create([
                 'type' => QuoteItemType::Feature,
                 'service_id' => $service->id,

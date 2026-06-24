@@ -3,7 +3,6 @@
 namespace Database\Seeders;
 
 use App\Models\BankAccount;
-use App\Models\MaintenancePlan;
 use App\Models\Service;
 use App\Models\ServiceFeature;
 use App\Models\Setting;
@@ -19,72 +18,156 @@ class CatalogSeeder extends Seeder
 
     public function run(): void
     {
-        // ---- Maintenance plans (monthly, paid by transfer) ----
-        $plans = [
-            ['key' => 'basico', 'name' => 'Mantenimiento Básico', 'monthly_price_cents' => $this->mxn(499), 'sort_order' => 1,
-                'description' => 'Cambios menores, corrección de bugs y respaldo mensual.',
-                'included' => ['Cambios de texto e imágenes', 'Corrección de errores menores', 'Respaldo mensual', 'Soporte por WhatsApp']],
-            ['key' => 'estandar', 'name' => 'Mantenimiento Estándar', 'monthly_price_cents' => $this->mxn(999), 'sort_order' => 2,
-                'description' => 'Todo lo del Básico más actualizaciones y mejoras pequeñas.',
-                'included' => ['Todo lo del plan Básico', 'Actualización de librerías y seguridad', 'Mejoras pequeñas mensuales', 'Monitoreo de disponibilidad']],
-            ['key' => 'premium', 'name' => 'Mantenimiento Premium', 'monthly_price_cents' => $this->mxn(1999), 'sort_order' => 3,
-                'description' => 'Atención prioritaria y horas de desarrollo incluidas.',
-                'included' => ['Todo lo del plan Estándar', 'Atención prioritaria', '2 horas de desarrollo al mes', 'Reportes de rendimiento']],
-        ];
-        foreach ($plans as $p) {
-            MaintenancePlan::updateOrCreate(['key' => $p['key']], $p);
-        }
-        $estandar = MaintenancePlan::where('key', 'estandar')->first();
+        $this->seedServices();
+        $this->seedFunctions();
+        $this->seedBank();
+        $this->seedSettings();
+    }
 
-        // ---- Services (base catalog, prices are placeholders to tune in the panel) ----
+    /**
+     * Base platform tiers. Price + base maintenance scale with complexity:
+     * a landing is cheap with little maintenance; an app is expensive with much more.
+     */
+    private function seedServices(): void
+    {
         $services = [
-            ['key' => 'landing', 'name' => 'Landing Page', 'category' => 'landing',
-                'description' => 'Una sola página de alto impacto para captar clientes.',
-                'base_price_cents' => $this->mxn(3500), 'included_pages' => 1,
-                'per_page_price_cents' => $this->mxn(900), 'per_language_price_cents' => $this->mxn(1200),
-                'default_timeline_days' => 5, 'sort_order' => 1],
-            ['key' => 'website', 'name' => 'Sitio Web', 'category' => 'website',
-                'description' => 'Sitio web informativo de varias páginas con diseño profesional.',
-                'base_price_cents' => $this->mxn(7500), 'included_pages' => 4,
-                'per_page_price_cents' => $this->mxn(1200), 'per_language_price_cents' => $this->mxn(1500),
-                'default_timeline_days' => 12, 'sort_order' => 2],
-            ['key' => 'ecommerce', 'name' => 'Tienda en Línea', 'category' => 'ecommerce',
-                'description' => 'Tienda e-commerce con catálogo, carrito y pagos.',
-                'base_price_cents' => $this->mxn(15000), 'included_pages' => 6,
-                'per_page_price_cents' => $this->mxn(1200), 'per_language_price_cents' => $this->mxn(2500),
-                'default_timeline_days' => 25, 'sort_order' => 3],
-            ['key' => 'webapp', 'name' => 'Aplicación Web', 'category' => 'webapp',
-                'description' => 'Aplicación web a la medida con panel y lógica de negocio.',
-                'base_price_cents' => $this->mxn(25000), 'included_pages' => 8,
-                'per_page_price_cents' => $this->mxn(1800), 'per_language_price_cents' => $this->mxn(3000),
-                'default_timeline_days' => 40, 'sort_order' => 4],
+            ['key' => 'landing', 'name' => 'Landing Page', 'category' => 'web', 'sort_order' => 1,
+                'description' => 'Una página de alto impacto para captar clientes.',
+                'base_price' => 3500, 'base_maint' => 300, 'included_pages' => 1, 'per_page' => 900, 'per_lang' => 1200, 'timeline' => 5],
+            ['key' => 'website', 'name' => 'Sitio Web', 'category' => 'web', 'sort_order' => 2,
+                'description' => 'Sitio informativo de varias páginas con diseño profesional.',
+                'base_price' => 7500, 'base_maint' => 500, 'included_pages' => 4, 'per_page' => 1200, 'per_lang' => 1500, 'timeline' => 12],
+            ['key' => 'ecommerce', 'name' => 'Tienda en Línea', 'category' => 'ecommerce', 'sort_order' => 3,
+                'description' => 'Tienda con catálogo, carrito y pagos.',
+                'base_price' => 14000, 'base_maint' => 900, 'included_pages' => 6, 'per_page' => 1200, 'per_lang' => 2000, 'timeline' => 25],
+            ['key' => 'webapp', 'name' => 'Aplicación Web', 'category' => 'app', 'sort_order' => 4,
+                'description' => 'Aplicación web a la medida con lógica de negocio y panel.',
+                'base_price' => 22000, 'base_maint' => 1400, 'included_pages' => 8, 'per_page' => 1800, 'per_lang' => 2500, 'timeline' => 40],
+            ['key' => 'mobileapp', 'name' => 'Aplicación Móvil', 'category' => 'app', 'sort_order' => 5,
+                'description' => 'App nativa/híbrida para iOS y Android.',
+                'base_price' => 38000, 'base_maint' => 2200, 'included_pages' => 4, 'per_page' => 2000, 'per_lang' => 3000, 'timeline' => 55],
         ];
+
         foreach ($services as $s) {
-            $s['default_maintenance_plan_id'] = $estandar?->id;
-            Service::updateOrCreate(['key' => $s['key']], $s);
+            Service::updateOrCreate(['key' => $s['key']], [
+                'name' => $s['name'], 'description' => $s['description'], 'category' => $s['category'],
+                'base_price_cents' => $this->mxn($s['base_price']),
+                'base_maintenance_cents' => $this->mxn($s['base_maint']),
+                'included_pages' => $s['included_pages'],
+                'per_page_price_cents' => $this->mxn($s['per_page']),
+                'per_language_price_cents' => $this->mxn($s['per_lang']),
+                'default_timeline_days' => $s['timeline'],
+                'default_maintenance_plan_id' => null,
+                'is_active' => true, 'sort_order' => $s['sort_order'],
+            ]);
         }
+    }
 
-        // ---- Global add-ons (offered for any service) ----
-        $features = [
-            ['key' => 'dominio_correo', 'name' => 'Dominio + correos', 'price_cents' => $this->mxn(1200), 'sort_order' => 1,
-                'description' => 'Registro de dominio y configuración de correos profesionales por 1 año.'],
-            ['key' => 'seo_basico', 'name' => 'SEO básico', 'price_cents' => $this->mxn(1800), 'sort_order' => 2,
-                'description' => 'Optimización inicial para buscadores y metadatos.'],
-            ['key' => 'blog_cms', 'name' => 'Blog / CMS', 'price_cents' => $this->mxn(2500), 'sort_order' => 3,
-                'description' => 'Gestor de contenidos para publicar y editar notas.'],
-            ['key' => 'pasarela_pago', 'name' => 'Pasarela de pago', 'price_cents' => $this->mxn(3500), 'sort_order' => 4,
-                'description' => 'Integración de pagos (MercadoPago / Stripe).'],
-            ['key' => 'whatsapp_integracion', 'name' => 'Integración WhatsApp', 'price_cents' => $this->mxn(2000), 'sort_order' => 5,
-                'description' => 'Botón y automatización de contacto por WhatsApp.'],
-            ['key' => 'diseno_premium', 'name' => 'Diseño premium', 'price_cents' => $this->mxn(4000), 'sort_order' => 6,
-                'description' => 'Diseño visual a la medida con animaciones.'],
+    /**
+     * Function catalog. Each function adds a one-time BUILD price and a monthly
+     * MAINTENANCE cost, so a project with more (and heavier) functions costs more
+     * to build AND more to maintain. applies_to = null means "any project type".
+     * Tuple: [key, name, category, build, maint, applies_to|null]
+     */
+    private function seedFunctions(): void
+    {
+        $functions = [
+            // Diseño & UX
+            ['diseno_premium', 'Diseño premium a la medida', 'Diseño', 4000, 250, null],
+            ['animaciones', 'Animaciones e interacciones', 'Diseño', 2500, 150, null],
+            ['modo_oscuro', 'Modo oscuro', 'Diseño', 1000, 60, ['website', 'ecommerce', 'webapp', 'mobileapp']],
+            ['branding', 'Identidad visual / branding', 'Diseño', 3000, 0, null],
+
+            // Contenido
+            ['blog_cms', 'Blog / CMS administrable', 'Contenido', 2500, 180, ['website', 'ecommerce', 'webapp']],
+            ['editor_contenido', 'Editor de contenido (autogestión)', 'Contenido', 3000, 200, ['website', 'ecommerce', 'webapp']],
+            ['galeria', 'Galería multimedia / video', 'Contenido', 1500, 100, null],
+
+            // E-commerce
+            ['catalogo', 'Catálogo de productos', 'E-commerce', 3500, 250, ['ecommerce', 'webapp', 'mobileapp']],
+            ['carrito', 'Carrito de compras', 'E-commerce', 3000, 200, ['ecommerce', 'webapp', 'mobileapp']],
+            ['inventario', 'Gestión de inventario', 'E-commerce', 3500, 280, ['ecommerce', 'webapp']],
+            ['cupones', 'Cupones y descuentos', 'E-commerce', 1500, 100, ['ecommerce']],
+            ['envios', 'Cálculo de envíos / paquetería', 'E-commerce', 2500, 200, ['ecommerce']],
+            ['wishlist', 'Lista de deseos', 'E-commerce', 1200, 80, ['ecommerce']],
+            ['resenas', 'Reseñas y calificaciones', 'E-commerce', 1800, 120, ['ecommerce']],
+
+            // Pagos
+            ['pasarela_pago', 'Pasarela de pago (MercadoPago/Stripe)', 'Pagos', 3500, 300, ['website', 'ecommerce', 'webapp', 'mobileapp']],
+            ['pagos_recurrentes', 'Suscripciones / pagos recurrentes', 'Pagos', 4000, 350, ['ecommerce', 'webapp', 'mobileapp']],
+            ['facturacion_cfdi', 'Facturación CFDI (SAT)', 'Pagos', 5000, 400, ['ecommerce', 'webapp']],
+            ['pagos_inapp', 'Pagos dentro de la app', 'Pagos', 5000, 400, ['mobileapp']],
+
+            // Usuarios & acceso
+            ['auth', 'Registro / inicio de sesión', 'Usuarios', 2500, 200, ['website', 'ecommerce', 'webapp', 'mobileapp']],
+            ['sso', 'Inicio de sesión social (Google/Apple)', 'Usuarios', 1800, 100, ['ecommerce', 'webapp', 'mobileapp']],
+            ['roles', 'Roles y permisos', 'Usuarios', 2500, 180, ['ecommerce', 'webapp', 'mobileapp']],
+            ['perfiles', 'Perfiles de usuario', 'Usuarios', 2000, 130, ['ecommerce', 'webapp', 'mobileapp']],
+            ['panel_admin', 'Panel de administración', 'Usuarios', 6000, 450, ['ecommerce', 'webapp', 'mobileapp']],
+
+            // Comunicación
+            ['whatsapp_integ', 'Integración WhatsApp', 'Comunicación', 2500, 180, null],
+            ['chat_vivo', 'Chat en vivo', 'Comunicación', 2500, 200, null],
+            ['notif_email', 'Notificaciones por correo', 'Comunicación', 1500, 100, null],
+            ['notif_push', 'Notificaciones push', 'Comunicación', 2500, 180, ['webapp', 'mobileapp']],
+            ['reservaciones', 'Reservaciones / agenda de citas', 'Comunicación', 4000, 300, ['website', 'ecommerce', 'webapp', 'mobileapp']],
+            ['ia_chatbot', 'Chatbot con IA', 'Comunicación', 5000, 400, null],
+
+            // Integraciones
+            ['api_externa', 'Integración con API / sistema externo', 'Integraciones', 4000, 300, null],
+            ['crm_erp', 'Integración con CRM / ERP', 'Integraciones', 4500, 350, ['ecommerce', 'webapp']],
+            ['mapas', 'Mapas y geolocalización', 'Integraciones', 2000, 150, null],
+            ['email_marketing', 'Email marketing (Mailchimp)', 'Integraciones', 1800, 120, null],
+
+            // Datos & reportes
+            ['dashboard', 'Tablero con métricas', 'Datos y reportes', 4500, 320, ['ecommerce', 'webapp', 'mobileapp']],
+            ['reportes', 'Reportes y exportación (PDF/Excel)', 'Datos y reportes', 2500, 200, ['ecommerce', 'webapp']],
+            ['buscador', 'Buscador avanzado / filtros', 'Datos y reportes', 2500, 180, ['ecommerce', 'webapp']],
+            ['tiempo_real', 'Sincronización en tiempo real', 'Datos y reportes', 4500, 380, ['webapp', 'mobileapp']],
+            ['multi_sucursal', 'Multi-sucursal / multi-tenant', 'Datos y reportes', 6000, 500, ['ecommerce', 'webapp']],
+
+            // Móvil
+            ['offline', 'Modo offline / PWA', 'Móvil', 3000, 220, ['webapp', 'mobileapp']],
+            ['biometria', 'Acceso biométrico', 'Móvil', 2000, 120, ['mobileapp']],
+            ['camara_qr', 'Cámara / escáner QR', 'Móvil', 2000, 130, ['mobileapp']],
+            ['publicacion_stores', 'Publicación en App Store y Play Store', 'Móvil', 3500, 250, ['mobileapp']],
+
+            // Marketing
+            ['seo_avanzado', 'SEO avanzado', 'Marketing', 2500, 150, null],
+            ['analitica', 'Analítica y eventos', 'Marketing', 1200, 80, null],
+            ['redes_sociales', 'Integración con redes sociales', 'Marketing', 1500, 100, null],
+
+            // Infraestructura
+            ['dominio_correos', 'Dominio + correos profesionales (1 año)', 'Infraestructura', 1200, 120, null],
+            ['hosting_premium', 'Hosting administrado premium', 'Infraestructura', 2000, 250, null],
+            ['respaldos', 'Respaldos automáticos', 'Infraestructura', 1000, 90, null],
+            ['seguridad', 'Seguridad reforzada (SSL/WAF)', 'Infraestructura', 1500, 120, null],
         ];
-        foreach ($features as $f) {
-            $f['service_id'] = null;
-            ServiceFeature::updateOrCreate(['key' => $f['key'], 'service_id' => null], $f);
+
+        foreach ($functions as $i => [$key, $name, $category, $build, $maint, $appliesTo]) {
+            ServiceFeature::updateOrCreate(
+                ['key' => $key, 'service_id' => null],
+                [
+                    'name' => $name,
+                    'category' => $category,
+                    'price_cents' => $this->mxn($build),
+                    'maintenance_cents' => $this->mxn($maint),
+                    'price_type' => 'flat',
+                    'applies_to' => $appliesTo,
+                    'is_active' => true,
+                    'sort_order' => $i + 1,
+                ]
+            );
         }
 
-        // ---- Default bank account (placeholder — fill in real details in the panel) ----
+        // Remove any legacy global functions no longer in the catalog.
+        ServiceFeature::whereNull('service_id')
+            ->whereNotIn('key', array_column($functions, 0))
+            ->delete();
+    }
+
+    private function seedBank(): void
+    {
         BankAccount::updateOrCreate(
             ['label' => 'Cuenta principal'],
             [
@@ -93,8 +176,10 @@ class CatalogSeeder extends Seeder
                 'instructions' => 'Envía tu comprobante por este chat una vez realizada la transferencia.',
             ]
         );
+    }
 
-        // ---- Settings: branding, pricing, AI ----
+    private function seedSettings(): void
+    {
         Setting::put('company_name', 'Overcloud', 'branding');
         Setting::put('brand_primary', '#4f46e5', 'branding');
         Setting::put('brand_accent', '#0ea5e9', 'branding');

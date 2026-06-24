@@ -10,7 +10,7 @@ class Service extends Model
 {
     protected $fillable = [
         'key', 'name', 'description', 'category',
-        'base_price_cents', 'currency', 'included_pages',
+        'base_price_cents', 'base_maintenance_cents', 'currency', 'included_pages',
         'per_page_price_cents', 'per_language_price_cents',
         'default_timeline_days', 'default_maintenance_plan_id',
         'is_active', 'sort_order',
@@ -18,6 +18,7 @@ class Service extends Model
 
     protected $casts = [
         'base_price_cents' => 'integer',
+        'base_maintenance_cents' => 'integer',
         'included_pages' => 'integer',
         'per_page_price_cents' => 'integer',
         'per_language_price_cents' => 'integer',

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive } from 'vue'
+import { computed, reactive } from 'vue'
 import { Head, router } from '@inertiajs/vue3'
 import { Package, Save, Building2, Settings } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
@@ -15,17 +15,20 @@ interface Service {
   name: string
   category: string | null
   base_price: number
+  base_maintenance: number
   per_page: number
   per_language: number
   included_pages: number
   is_active: boolean
 }
 
-interface Plan {
+interface Func {
   id: number
   name: string
-  monthly: number
-  included: string[] | null
+  category: string | null
+  build: number
+  maintenance: number
+  applies_to: string[] | null
   is_active: boolean
 }
 
@@ -49,10 +52,19 @@ interface SettingsShape {
 
 const props = defineProps<{
   services: Service[]
-  plans: Plan[]
+  functions: Func[]
   banks: Bank[]
   settings: SettingsShape
 }>()
+
+const functionsByCategory = computed(() => {
+  const groups: Record<string, Func[]> = {}
+  for (const f of props.functions) {
+    const cat = f.category ?? 'Otros'
+    ;(groups[cat] ??= []).push(f)
+  }
+  return groups
+})
 
 const currency = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' })
 
@@ -65,6 +77,7 @@ function saveService(s: Service): void {
     '/catalog/services/' + s.id,
     {
       base_price: s.base_price,
+      base_maintenance: s.base_maintenance,
       per_page: s.per_page,
       per_language: s.per_language,
       included_pages: s.included_pages,
@@ -128,6 +141,7 @@ function saveSettings(): void {
               <tr class="text-left">
                 <th class="px-3 py-2 font-medium">Servicio</th>
                 <th class="px-3 py-2 font-medium">Precio base</th>
+                <th class="px-3 py-2 font-medium">Mant. base/mes</th>
                 <th class="px-3 py-2 font-medium">Por página</th>
                 <th class="px-3 py-2 font-medium">Por idioma</th>
                 <th class="px-3 py-2 font-medium">Págs. incluidas</th>
@@ -151,6 +165,9 @@ function saveSettings(): void {
                   <Input v-model.number="s.base_price" type="number" class="w-28" />
                 </td>
                 <td class="px-3 py-2">
+                  <Input v-model.number="s.base_maintenance" type="number" class="w-24" />
+                </td>
+                <td class="px-3 py-2">
                   <Input v-model.number="s.per_page" type="number" class="w-24" />
                 </td>
                 <td class="px-3 py-2">
@@ -170,7 +187,7 @@ function saveSettings(): void {
                 </td>
               </tr>
               <tr v-if="serviceRows.length === 0">
-                <td colspan="7" class="px-3 py-6 text-center text-muted-foreground">
+                <td colspan="8" class="px-3 py-6 text-center text-muted-foreground">
                   No hay servicios registrados.
                 </td>
               </tr>
@@ -180,41 +197,33 @@ function saveSettings(): void {
       </CardContent>
     </Card>
 
-    <!-- Planes de mantenimiento -->
+    <!-- Catálogo de funciones -->
     <Card class="rounded-xl shadow-sm">
       <CardHeader>
         <CardTitle class="flex items-center gap-2">
           <Package class="size-5 text-muted-foreground" />
-          Planes de mantenimiento
+          Catálogo de funciones
         </CardTitle>
-        <CardDescription>Planes disponibles y sus características incluidas.</CardDescription>
+        <CardDescription>
+          El precio de cada proyecto y su mantenimiento mensual se calculan según las funciones incluidas — sin planes fijos.
+        </CardDescription>
       </CardHeader>
-      <CardContent>
-        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <Card v-for="p in plans" :key="p.id" class="rounded-xl border-border bg-card shadow-sm">
-            <CardHeader>
-              <div class="flex items-center justify-between">
-                <CardTitle class="text-base">{{ p.name }}</CardTitle>
-                <Badge :variant="p.is_active ? 'default' : 'secondary'">
-                  {{ p.is_active ? 'Activo' : 'Inactivo' }}
-                </Badge>
-              </div>
-              <CardDescription>
-                <span class="text-lg font-semibold text-foreground">{{ currency.format(p.monthly) }}</span>
-                <span class="text-muted-foreground"> / mes</span>
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ul v-if="p.included && p.included.length" class="flex flex-col gap-1 text-sm text-muted-foreground">
-                <li v-for="(item, i) in p.included" :key="i" class="flex items-start gap-2">
-                  <span class="mt-1 size-1.5 shrink-0 rounded-full bg-foreground/40" />
-                  <span>{{ item }}</span>
-                </li>
-              </ul>
-              <p v-else class="text-sm text-muted-foreground">Sin características listadas.</p>
-            </CardContent>
-          </Card>
-          <p v-if="plans.length === 0" class="text-sm text-muted-foreground">No hay planes registrados.</p>
+      <CardContent class="flex flex-col gap-5">
+        <div v-for="(items, cat) in functionsByCategory" :key="cat" class="flex flex-col gap-2">
+          <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{{ cat }}</p>
+          <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            <div
+              v-for="f in items"
+              :key="f.id"
+              class="flex items-center justify-between gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm"
+            >
+              <span class="text-foreground">{{ f.name }}</span>
+              <span class="whitespace-nowrap text-right leading-tight">
+                <span class="font-medium text-foreground">{{ currency.format(f.build) }}</span>
+                <span v-if="f.maintenance" class="block text-xs text-muted-foreground">+{{ currency.format(f.maintenance) }}/mes</span>
+              </span>
+            </div>
+          </div>
         </div>
       </CardContent>
     </Card>

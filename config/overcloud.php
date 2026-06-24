@@ -23,4 +23,11 @@ return [
     'company' => [
         'name' => env('COMPANY_NAME', 'Overcloud'),
     ],
+
+    // Dev-Business hub integration (push clients/projects/payments).
+    'devbusiness' => [
+        'url' => env('DEVBUSINESS_URL'),
+        'token' => env('DEVBUSINESS_API_TOKEN'),
+        'enabled' => (bool) env('DEVBUSINESS_SYNC', true),
+    ],
 ];

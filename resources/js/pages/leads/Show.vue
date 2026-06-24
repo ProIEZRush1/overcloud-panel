@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Head, Link, router, useForm } from '@inertiajs/vue3'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { FileText, FileSignature, Send, Check, MessageSquare, Save } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card'
@@ -81,18 +81,19 @@ interface ServiceOption {
   key: string
   name: string
   base_price_cents: number
+  base_maintenance_cents: number
+  included_pages: number
+  per_page_price_cents: number
+  per_language_price_cents: number
 }
 
 interface FeatureOption {
   id: number
   name: string
+  category: string | null
   price_cents: number
-}
-
-interface PlanOption {
-  id: number
-  name: string
-  monthly_price_cents: number
+  maintenance_cents: number
+  applies_to: string[] | null
 }
 
 interface StageOption {
@@ -103,9 +104,9 @@ interface StageOption {
 interface Options {
   services: ServiceOption[]
   features: FeatureOption[]
-  plans: PlanOption[]
   stages: StageOption[]
   banks: number
+  service_key: string | null
 }
 
 const props = defineProps<{
@@ -133,6 +134,35 @@ const toggleFeature = (id: number, checked: boolean): void => {
     featureIds.value = featureIds.value.filter((f) => f !== id)
   }
 }
+
+const selectedService = computed(() => props.options.services.find((s) => s.id === props.lead.service_id) ?? null)
+const selectedFunctions = computed(() => props.options.features.filter((f) => featureIds.value.includes(f.id)))
+
+const estimateBuild = computed(() => {
+  let total = selectedFunctions.value.reduce((sum, f) => sum + f.price_cents, 0)
+  const s = selectedService.value
+  if (s) {
+    const extraPages = Math.max(0, builderPages.value - s.included_pages)
+    const extraLangs = Math.max(0, builderLanguages.value - 1)
+    total += s.base_price_cents + extraPages * s.per_page_price_cents + extraLangs * s.per_language_price_cents
+  }
+  return Math.max(0, total - Math.round(discount.value * 100))
+})
+
+const estimateMaint = computed(() => {
+  let total = selectedFunctions.value.reduce((sum, f) => sum + f.maintenance_cents, 0)
+  if (selectedService.value) total += selectedService.value.base_maintenance_cents
+  return total
+})
+
+const functionsByCategory = computed(() => {
+  const groups: Record<string, FeatureOption[]> = {}
+  for (const f of props.options.features) {
+    const cat = f.category ?? 'Otros'
+    ;(groups[cat] ??= []).push(f)
+  }
+  return groups
+})
 
 const generateSpec = (): void => {
   router.post('/leads/' + props.lead.uuid + '/spec', {}, { preserveScroll: true })
@@ -166,7 +196,6 @@ const form = useForm({
   company: props.lead.company ?? '',
   stage: props.lead.stage,
   service_id: props.lead.service_id,
-  maintenance_plan_id: props.lead.maintenance_plan_id,
   pages: props.lead.pages ?? 0,
   deposit_percent: props.lead.deposit_percent,
   languages: props.lead.languages.join(', '),
@@ -228,23 +257,29 @@ const saveLead = (): void => {
             <div class="flex flex-col gap-3">
               <p class="text-sm font-medium text-foreground">Cotización</p>
 
-              <div class="flex flex-col gap-2">
-                <Label class="text-muted-foreground">Funcionalidades</Label>
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <label
-                    v-for="feature in options.features"
-                    :key="feature.id"
-                    class="flex items-center gap-2 text-sm border border-border rounded-md px-3 py-2 bg-muted/40 cursor-pointer hover:bg-muted transition-colors"
-                  >
-                    <input
-                      type="checkbox"
-                      class="size-4 rounded border-border"
-                      :checked="featureIds.includes(feature.id)"
-                      @change="toggleFeature(feature.id, ($event.target as HTMLInputElement).checked)"
-                    />
-                    <span class="flex-1 text-foreground">{{ feature.name }}</span>
-                    <span class="text-muted-foreground">{{ money(feature.price_cents) }}</span>
-                  </label>
+              <div class="flex flex-col gap-3">
+                <Label class="text-muted-foreground">Funciones (construcción + mantenimiento/mes)</Label>
+                <div v-for="(items, cat) in functionsByCategory" :key="cat" class="flex flex-col gap-1.5">
+                  <p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{{ cat }}</p>
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <label
+                      v-for="feature in items"
+                      :key="feature.id"
+                      class="flex items-center gap-2 text-sm border border-border rounded-md px-3 py-2 bg-muted/40 cursor-pointer hover:bg-muted transition-colors"
+                    >
+                      <input
+                        type="checkbox"
+                        class="size-4 rounded border-border"
+                        :checked="featureIds.includes(feature.id)"
+                        @change="toggleFeature(feature.id, ($event.target as HTMLInputElement).checked)"
+                      />
+                      <span class="flex-1 text-foreground">{{ feature.name }}</span>
+                      <span class="text-right leading-tight">
+                        <span class="text-foreground">{{ money(feature.price_cents) }}</span>
+                        <span v-if="feature.maintenance_cents" class="block text-xs text-muted-foreground">+{{ money(feature.maintenance_cents) }}/mes</span>
+                      </span>
+                    </label>
+                  </div>
                 </div>
               </div>
 
@@ -260,6 +295,19 @@ const saveLead = (): void => {
                 <div class="flex flex-col gap-1.5">
                   <Label for="builder-discount" class="text-muted-foreground">Descuento (MXN)</Label>
                   <Input id="builder-discount" type="number" min="0" step="0.01" v-model.number="discount" />
+                </div>
+              </div>
+
+              <div class="flex items-center justify-between rounded-lg border border-border bg-muted/40 px-4 py-3">
+                <div>
+                  <p class="text-xs text-muted-foreground">Estimado de construcción</p>
+                  <p class="text-lg font-semibold text-foreground">{{ money(estimateBuild) }}</p>
+                </div>
+                <div class="text-right">
+                  <p class="text-xs text-muted-foreground">Mantenimiento</p>
+                  <p class="text-lg font-semibold text-foreground">
+                    {{ money(estimateMaint) }}<span class="text-xs font-normal text-muted-foreground">/mes</span>
+                  </p>
                 </div>
               </div>
 
@@ -468,18 +516,6 @@ const saveLead = (): void => {
             >
               <option :value="null">Sin servicio</option>
               <option v-for="svc in options.services" :key="svc.id" :value="svc.id">{{ svc.name }}</option>
-            </select>
-          </div>
-
-          <div class="flex flex-col gap-1.5">
-            <Label for="maintenance_plan_id">Plan de mantenimiento</Label>
-            <select
-              id="maintenance_plan_id"
-              v-model="form.maintenance_plan_id"
-              class="border border-border rounded-md bg-background text-foreground text-sm h-9 px-3"
-            >
-              <option :value="null">Sin plan</option>
-              <option v-for="plan in options.plans" :key="plan.id" :value="plan.id">{{ plan.name }}</option>
             </select>
           </div>
 

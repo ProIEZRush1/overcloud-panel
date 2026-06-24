@@ -53,6 +53,12 @@ class QuoteController extends Controller
         $quote->lead->update(['stage' => LeadStage::Accepted]);
         $request = $payments->createDeposit($quote);
 
+        try {
+            app(\App\Services\CrmSync::class)->syncQuoteAccepted($quote);
+        } catch (\Throwable $e) {
+            report($e);
+        }
+
         $bank = $request->bank_details_snapshot ?? [];
         $this->toClient($quote->lead, function ($session, $jid) use ($request, $bank) {
             $lines = ["¡Gracias! Para iniciar, realiza el anticipo de *".\App\Support\Money::format($request->amount_cents, $request->currency)."* 🙌"];
