@@ -25,7 +25,10 @@ class BotResponder
     public function handle(Conversation $conversation, Message $inbound): ?Message
     {
         $conversation->loadMissing('lead', 'whatsappAccount');
-        if (! $conversation->botMayReply() || ! $conversation->whatsappAccount?->auto_reply) {
+        // Per-conversation gate only: the bot replies solely in threads explicitly
+        // enabled (ai_enabled). The account's auto_reply just seeds the default for
+        // NEW conversations (see MessageIngest), so it never blanket-answers everyone.
+        if (! $conversation->botMayReply()) {
             return null;
         }
 
