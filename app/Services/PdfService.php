@@ -19,7 +19,7 @@ class PdfService
         ])->setPaper('letter');
 
         $path = "pdf/quotes/{$quote->number}.pdf";
-        Storage::disk('public')->put($path, $pdf->output());
+        Storage::put($path, $pdf->output());
         $quote->update(['pdf_path' => $path]);
 
         return $path;
@@ -35,7 +35,7 @@ class PdfService
         ])->setPaper('letter');
 
         $path = "pdf/specs/{$spec->uuid}.pdf";
-        Storage::disk('public')->put($path, $pdf->output());
+        Storage::put($path, $pdf->output());
         $spec->update(['pdf_path' => $path]);
 
         return $path;

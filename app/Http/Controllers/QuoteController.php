@@ -17,12 +17,12 @@ class QuoteController extends Controller
 
     public function pdf(Quote $quote, PdfService $pdf)
     {
-        if (! $quote->pdf_path || ! Storage::disk('public')->exists($quote->pdf_path)) {
+        if (! $quote->pdf_path || ! Storage::exists($quote->pdf_path)) {
             $pdf->renderQuote($quote);
             $quote->refresh();
         }
 
-        return response(Storage::disk('public')->get($quote->pdf_path), 200, [
+        return response(Storage::get($quote->pdf_path), 200, [
             'Content-Type' => 'application/pdf',
             'Content-Disposition' => 'inline; filename="'.$quote->number.'.pdf"',
         ]);
@@ -39,7 +39,7 @@ class QuoteController extends Controller
         $this->toClient($quote->lead, function ($session, $jid) use ($quote) {
             $this->gateway->sendText($session, $jid, "Aquí tienes tu cotización *{$quote->number}* 📄\nTotal: ".\App\Support\Money::format($quote->total_cents, $quote->currency).". ¿La aprobamos? ✅");
             $this->gateway->sendMedia($session, $jid, [
-                'base64' => base64_encode(Storage::disk('public')->get($quote->pdf_path)),
+                'base64' => base64_encode(Storage::get($quote->pdf_path)),
                 'mimetype' => 'application/pdf', 'fileName' => $quote->number.'.pdf', 'kind' => 'document',
             ]);
         });

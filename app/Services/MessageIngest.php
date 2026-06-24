@@ -135,7 +135,7 @@ class MessageIngest
         $ext = Str::of($media['fileName'] ?? '')->afterLast('.')->limit(8, '')->value()
             ?: Str::of($media['mimetype'] ?? 'bin')->afterLast('/')->limit(8, '')->value();
         $path = "wa/{$session}/".($data['wa_message_id'] ?? Str::uuid()).'.'.($ext ?: 'bin');
-        Storage::disk('public')->put($path, base64_decode($media['base64']));
+        Storage::put($path, base64_decode($media['base64']));
 
         return $path;
     }
