@@ -194,7 +194,7 @@ class CatalogSeeder extends Seeder
         Setting::put('quote_prefix', 'OVC', 'branding');
         Setting::put('currency', 'MXN', 'pricing');
         Setting::put('tax_percent', 0, 'pricing');
-        Setting::put('default_deposit_percent', 50, 'pricing');
+        Setting::put('default_deposit_percent', 40, 'pricing');
         Setting::put('quote_valid_days', 15, 'pricing');
         Setting::put('ai_model', 'claude-opus-4-8', 'ai');
         Setting::put('ai_locale', 'es', 'ai');

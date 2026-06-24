@@ -25,7 +25,9 @@ class QuoteBuilder
         $pages = $opts['pages'] ?? $lead->pages ?? $service->included_pages;
         $languages = $opts['languages'] ?? max(1, count($lead->languages ?? ['es']));
 
-        $depositPercent = (int) Setting::get('default_deposit_percent', 50);
+        $depositPercent = (int) Setting::get('default_deposit_percent', 40);
+        $deployPercent = intdiv(100 - $depositPercent, 2);
+        $finalPercent = 100 - $depositPercent - $deployPercent;
 
         $features = ServiceFeature::whereIn('id', $opts['feature_ids'] ?? [])->get();
 
@@ -43,7 +45,7 @@ class QuoteBuilder
             'maintenance_monthly_cents' => $maintenance,
             'status' => QuoteStatus::Draft,
             'valid_until' => now()->addDays((int) Setting::get('quote_valid_days', 15)),
-            'terms' => 'Anticipo del '.$depositPercent.'% para iniciar; el resto contra entrega. '
+            'terms' => 'Forma de pago: '.$depositPercent.'% para iniciar, '.$deployPercent.'% al desplegar el sitio y '.$finalPercent.'% en la entrega final. '
                 .'El mantenimiento mensual es opcional y se calcula según las funciones incluidas. Precios en MXN.',
         ]);
 
