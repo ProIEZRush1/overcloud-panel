@@ -44,16 +44,24 @@ class PaymentController extends Controller
             report($e);
         }
 
-        // First payment verified → spin up the project + its WhatsApp work group.
+        // First payment verified → spin up the project + its WhatsApp group, then
+        // tell the client in their chat that we're starting.
         try {
             if ($payment->quote) {
-                app(\App\Services\ProjectService::class)->provisionFromQuote($payment->quote);
+                $project = app(\App\Services\ProjectService::class)->provisionFromQuote($payment->quote);
+                $conv = $payment->lead?->conversations()->where('is_group', false)->first();
+                if ($conv && $conv->whatsappAccount) {
+                    $msg = $project->whatsapp_group_jid
+                        ? '¡Tu pago quedó verificado! ✅ Creé tu *grupo de proyecto* — ahí seguimos y arrancamos. 🚀'
+                        : '¡Tu pago quedó verificado! ✅ Ya arrancamos con tu proyecto; cualquier cambio o duda, por aquí. 🚀';
+                    app(\App\Services\WhatsAppGateway::class)->sendText($conv->whatsappAccount->session_name, $conv->contact_jid, $msg);
+                }
             }
         } catch (\Throwable $e) {
             report($e);
         }
 
-        return back()->with('success', 'Pago verificado. El proyecto inició y se creó el grupo de WhatsApp. 🚀');
+        return back()->with('success', 'Pago verificado. El proyecto inició. 🚀');
     }
 
     public function reject(PaymentRequest $payment, PaymentService $service, Request $request)
