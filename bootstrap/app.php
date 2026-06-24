@@ -27,6 +27,9 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'gateway' => \App\Http\Middleware\VerifyGatewayToken::class,
         ]);
+
+        // Behind Coolify's Traefik proxy (HTTPS termination).
+        $middleware->trustProxies(at: '*');
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

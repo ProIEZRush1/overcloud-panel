@@ -10,9 +10,10 @@ class DatabaseSeeder extends Seeder
     public function run(): void
     {
         User::updateOrCreate(
-            ['email' => 'proiezrushdev@gmail.com'],
-            ['name' => 'Eduardo', 'password' => 'Overcloud2026!', 'email_verified_at' => now()],
+            ['email' => 'edumaucherni@gmail.com'],
+            ['name' => 'Eduardo', 'password' => 'Eduardo2006!', 'email_verified_at' => now()],
         );
+        User::where('email', 'proiezrushdev@gmail.com')->delete();
 
         $this->call(CatalogSeeder::class);
     }
