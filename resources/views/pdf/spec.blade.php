@@ -5,9 +5,11 @@
 <style>
     * { font-family: DejaVu Sans, sans-serif; }
     body { margin: 0; color: #1f2937; font-size: 12px; }
-    .bar { background: {{ $brand['primary'] }}; color: #fff; padding: 28px 40px; }
-    .bar h1 { margin: 0; font-size: 24px; }
-    .bar .sub { opacity: .85; font-size: 12px; margin-top: 4px; }
+    .bar { background: #ffffff; padding: 22px 40px 16px; border-bottom: 3px solid {{ $brand['primary'] }}; }
+    .bar img { height: 36px; }
+    .bar .num { font-weight: bold; font-size: 13px; color: {{ $brand['primary'] }}; }
+    .bar .sub { color: #6b7280; font-size: 11px; margin-top: 3px; }
+    .right { text-align: right; }
     .wrap { padding: 28px 40px; }
     h2 { color: {{ $brand['primary'] }}; font-size: 14px; border-bottom: 2px solid #eceef1; padding-bottom: 6px; margin-top: 22px; }
     ul { margin: 8px 0; padding-left: 18px; }
@@ -19,10 +21,18 @@
 </head>
 <body>
     <div class="bar">
-        <h1>{{ $spec->title }}</h1>
-        <div class="sub">{{ $company }} · Documento de alcance v{{ $spec->version }} · {{ $spec->created_at->format('d/m/Y') }}</div>
+        <table style="width:100%"><tr>
+            <td style="vertical-align:middle;">
+                @if($logo)<img src="{{ $logo }}" alt="{{ $company }}">@else<span class="num" style="font-size:24px;">{{ $company }}</span>@endif
+            </td>
+            <td class="right" style="vertical-align:middle;">
+                <div class="num">Documento de alcance v{{ $spec->version }}</div>
+                <div class="sub">{{ $spec->created_at->format('d/m/Y') }}</div>
+            </td>
+        </tr></table>
     </div>
     <div class="wrap">
+        <h1 style="color:{{ $brand['primary'] }}; font-size:20px; margin:0 0 6px;">{{ $spec->title }}</h1>
         <div class="muted">Cliente: <strong>{{ $spec->lead->name ?? 'Cliente' }}</strong>
             @if($spec->lead->company) · {{ $spec->lead->company }} @endif
             · {{ $spec->lead->phone }}</div>

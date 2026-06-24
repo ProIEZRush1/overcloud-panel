@@ -6,9 +6,10 @@
 <style>
     * { font-family: DejaVu Sans, sans-serif; }
     body { margin: 0; color: #1f2937; font-size: 12px; }
-    .bar { background: {{ $brand['primary'] }}; color: #fff; padding: 28px 40px; }
-    .bar h1 { margin: 0; font-size: 26px; letter-spacing: .5px; }
-    .bar .sub { opacity: .85; font-size: 12px; margin-top: 4px; }
+    .bar { background: #ffffff; padding: 22px 40px 16px; border-bottom: 3px solid {{ $brand['primary'] }}; }
+    .bar img { height: 36px; }
+    .bar .num { font-weight: bold; font-size: 13px; color: {{ $brand['primary'] }}; }
+    .bar .sub { color: #6b7280; font-size: 11px; margin-top: 3px; }
     .wrap { padding: 28px 40px; }
     .row { width: 100%; }
     .row td { vertical-align: top; }
@@ -28,8 +29,15 @@
 </head>
 <body>
     <div class="bar">
-        <h1>{{ $company }}</h1>
-        <div class="sub">Cotización {{ $quote->number }} &nbsp;·&nbsp; {{ $quote->created_at->format('d/m/Y') }}</div>
+        <table style="width:100%"><tr>
+            <td style="vertical-align:middle;">
+                @if($logo)<img src="{{ $logo }}" alt="{{ $company }}">@else<span class="num" style="font-size:24px;">{{ $company }}</span>@endif
+            </td>
+            <td class="right" style="vertical-align:middle;">
+                <div class="num">Cotización {{ $quote->number }}</div>
+                <div class="sub">{{ $quote->created_at->format('d/m/Y') }}</div>
+            </td>
+        </tr></table>
     </div>
 
     <div class="wrap">

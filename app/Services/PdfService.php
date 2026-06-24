@@ -16,6 +16,8 @@ class PdfService
             'quote' => $quote,
             'company' => config('overcloud.company.name'),
             'brand' => $this->brand(),
+            'logo' => $this->logo(),
+            'mark' => $this->logo('mark.png'),
         ])->setPaper('letter');
 
         $path = "pdf/quotes/{$quote->number}.pdf";
@@ -32,6 +34,8 @@ class PdfService
             'spec' => $spec,
             'company' => config('overcloud.company.name'),
             'brand' => $this->brand(),
+            'logo' => $this->logo(),
+            'mark' => $this->logo('mark.png'),
         ])->setPaper('letter');
 
         $path = "pdf/specs/{$spec->uuid}.pdf";
@@ -44,8 +48,18 @@ class PdfService
     private function brand(): array
     {
         return [
-            'primary' => \App\Models\Setting::get('brand_primary', '#4f46e5'),
-            'accent' => \App\Models\Setting::get('brand_accent', '#0ea5e9'),
+            'primary' => \App\Models\Setting::get('brand_primary', '#7c3aed'),
+            'accent' => \App\Models\Setting::get('brand_accent', '#c026d3'),
         ];
+    }
+
+    /** Brand image as a base64 data URI so dompdf embeds it reliably. */
+    private function logo(string $file = 'wordmark.png'): ?string
+    {
+        $path = public_path('brand/'.$file);
+
+        return is_file($path)
+            ? 'data:image/png;base64,'.base64_encode((string) file_get_contents($path))
+            : null;
     }
 }

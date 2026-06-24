@@ -189,8 +189,8 @@ class CatalogSeeder extends Seeder
     private function seedSettings(): void
     {
         Setting::put('company_name', 'Overcloud', 'branding');
-        Setting::put('brand_primary', '#4f46e5', 'branding');
-        Setting::put('brand_accent', '#0ea5e9', 'branding');
+        Setting::put('brand_primary', '#7c3aed', 'branding');
+        Setting::put('brand_accent', '#c026d3', 'branding');
         Setting::put('quote_prefix', 'OVC', 'branding');
         Setting::put('currency', 'MXN', 'pricing');
         Setting::put('tax_percent', 0, 'pricing');
