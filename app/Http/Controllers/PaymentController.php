@@ -23,7 +23,7 @@ class PaymentController extends Controller
                 'amount' => \App\Support\Money::format($p->amount_cents, $p->currency),
                 'status' => $p->status->value, 'status_label' => $p->status->label(),
                 'reference' => $p->reference,
-                'proof_url' => $p->latestProof?->file_path ? Storage::url($p->latestProof->file_path) : null,
+                'proof_url' => $p->latestProof ? route('files.proof', $p->latestProof) : null,
                 'proof_mime' => $p->latestProof?->file_mime,
                 'created' => $p->created_at->diffForHumans(),
             ]);

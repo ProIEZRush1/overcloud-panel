@@ -55,7 +55,7 @@ class LeadController extends Controller
             'specs' => $lead->specs->map(fn (Spec $s) => [
                 'uuid' => $s->uuid, 'version' => $s->version, 'title' => $s->title,
                 'status' => $s->status->value, 'status_label' => $s->status->label(),
-                'pdf_url' => $s->pdf_path ? Storage::url($s->pdf_path) : null,
+                'pdf_url' => $s->pdf_path ? route('files.spec', $s) : null,
                 'created' => $s->created_at->format('d/m/Y'),
             ]),
             'quotes' => $lead->quotes->map(fn (Quote $q) => $this->presentQuote($q)),
@@ -64,7 +64,7 @@ class LeadController extends Controller
                 'amount' => \App\Support\Money::format($p->amount_cents, $p->currency),
                 'status' => $p->status->value, 'status_label' => $p->status->label(),
                 'reference' => $p->reference,
-                'proof_url' => $p->latestProof?->file_path ? Storage::url($p->latestProof->file_path) : null,
+                'proof_url' => $p->latestProof ? route('files.proof', $p->latestProof) : null,
             ]),
             'project' => $lead->project ? ['uuid' => $lead->project->uuid, 'name' => $lead->project->name, 'status' => $lead->project->status->value] : null,
             'options' => [
@@ -135,7 +135,7 @@ class LeadController extends Controller
             'deposit' => \App\Support\Money::format($q->deposit_cents, $q->currency),
             'maintenance' => $q->maintenance_monthly_cents ? \App\Support\Money::format($q->maintenance_monthly_cents, $q->currency) : null,
             'valid_until' => $q->valid_until?->format('d/m/Y'),
-            'pdf_url' => $q->pdf_path ? Storage::url($q->pdf_path) : null,
+            'pdf_url' => $q->pdf_path ? route('quotes.pdf', $q) : null,
             'items' => $q->items->map(fn ($i) => [
                 'description' => $i->description, 'quantity' => $i->quantity,
                 'total' => \App\Support\Money::format($i->total_cents, $q->currency),

@@ -49,7 +49,7 @@ class ConversationController extends Controller
                     'type' => $m->type->value,
                     'body' => $m->body,
                     'caption' => $m->caption,
-                    'media_url' => $m->media_path ? Storage::url($m->media_path) : null,
+                    'media_url' => $m->media_path ? route('files.media', $m) : null,
                     'media_mime' => $m->media_mime,
                     'is_from_me' => $m->is_from_me,
                     'ai_generated' => $m->ai_generated,

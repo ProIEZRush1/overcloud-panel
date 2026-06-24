@@ -3,6 +3,7 @@
 use App\Http\Controllers\CatalogController;
 use App\Http\Controllers\ConversationController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\FileController;
 use App\Http\Controllers\LeadController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\QuoteController;
@@ -37,6 +38,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
     // Quotes
     Route::get('quotes/{quote}/pdf', [QuoteController::class, 'pdf'])->name('quotes.pdf');
+
+    // Authenticated file streaming (spec PDFs, payment proofs, WhatsApp media) — never public.
+    Route::get('files/specs/{spec}', [FileController::class, 'spec'])->name('files.spec');
+    Route::get('files/proofs/{proof}', [FileController::class, 'proof'])->name('files.proof');
+    Route::get('files/media/{message}', [FileController::class, 'media'])->name('files.media');
     Route::post('quotes/{quote}/send', [QuoteController::class, 'send'])->name('quotes.send');
     Route::post('quotes/{quote}/accept', [QuoteController::class, 'accept'])->name('quotes.accept');
 
