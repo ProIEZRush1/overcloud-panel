@@ -22,7 +22,8 @@ if [ -n "$CLAUDE_CREDS_JSON" ]; then
   echo "claude credentials written"
 fi
 
-# Background worker for WhatsApp bot replies + async jobs.
-php artisan queue:work --tries=1 --sleep=2 --timeout=180 >> storage/logs/worker.log 2>&1 &
+# Workers: a fast lane for bot replies, a separate slow lane for site deploys.
+php artisan queue:work --queue=default --tries=1 --sleep=2 --timeout=180 >> storage/logs/worker.log 2>&1 &
+php artisan queue:work --queue=deploy --tries=1 --sleep=3 --timeout=600 >> storage/logs/deploy.log 2>&1 &
 
 exec php artisan serve --host 0.0.0.0 --port 8080

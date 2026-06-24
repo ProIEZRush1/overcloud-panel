@@ -56,6 +56,11 @@ class PaymentController extends Controller
                         : '¡Tu pago quedó verificado! ✅ Ya arrancamos con tu proyecto; cualquier cambio o duda, por aquí. 🚀';
                     app(\App\Services\WhatsAppGateway::class)->sendText($conv->whatsappAccount->session_name, $conv->contact_jid, $msg);
                 }
+
+                // Autonomously build + deploy the client's site (queued).
+                if (config('overcloud.deploy.enabled')) {
+                    \App\Jobs\DeployProject::dispatch($project->id)->onQueue('deploy');
+                }
             }
         } catch (\Throwable $e) {
             report($e);

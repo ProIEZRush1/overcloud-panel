@@ -37,4 +37,16 @@ return [
         'token' => env('DEVBUSINESS_API_TOKEN'),
         'enabled' => (bool) env('DEVBUSINESS_SYNC', true),
     ],
+
+    // Autonomous build + deploy of the client's Laravel+Vue site after payment.
+    'deploy' => [
+        'enabled' => (bool) env('AUTODEPLOY_ENABLED', false),
+        'github_token' => env('GITHUB_TOKEN'),
+        'github_owner' => env('GITHUB_OWNER', 'ProIEZRush1'),
+        'template_repo' => env('TEMPLATE_REPO', 'overcloud-client-template'),
+        'coolify_url' => env('COOLIFY_API_URL', 'http://coolify:8080/api/v1'),
+        'coolify_token' => env('COOLIFY_API_TOKEN'),
+        'coolify_project' => env('COOLIFY_PROJECT_UUID', 'm0gc8swgwcoookso8cowwc8s'),
+        'coolify_server' => env('COOLIFY_SERVER_UUID', 'nwo4k04sswwos08wckkcg84s'),
+    ],
 ];
