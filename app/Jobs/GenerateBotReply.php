@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\Message;
 use App\Services\BotResponder;
+use App\Services\TranscriptionService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -28,11 +29,13 @@ class GenerateBotReply implements ShouldQueue
 
     public function __construct(public int $messageId) {}
 
-    public function handle(BotResponder $responder): void
+    public function handle(BotResponder $responder, TranscriptionService $transcriber): void
     {
         $message = Message::with('conversation.whatsappAccount', 'conversation.lead')->find($this->messageId);
 
         if ($message) {
+            // Voice notes → text first, so the bot reads them like any message.
+            $transcriber->transcribe($message);
             $responder->handle($message->conversation, $message);
         }
     }
