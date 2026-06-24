@@ -16,6 +16,14 @@ class CatalogSeeder extends Seeder
         return (int) round($pesos * 100);
     }
 
+    /** Accessible pricing: 40% off the list value, rounded to a clean increment, in centavos. */
+    private function cheaper(int|float $pesos, int $roundTo = 50): int
+    {
+        $discounted = round($pesos * 0.6 / $roundTo) * $roundTo;
+
+        return (int) round($discounted * 100);
+    }
+
     public function run(): void
     {
         $this->seedServices();
@@ -51,11 +59,11 @@ class CatalogSeeder extends Seeder
         foreach ($services as $s) {
             Service::updateOrCreate(['key' => $s['key']], [
                 'name' => $s['name'], 'description' => $s['description'], 'category' => $s['category'],
-                'base_price_cents' => $this->mxn($s['base_price']),
-                'base_maintenance_cents' => $this->mxn($s['base_maint']),
+                'base_price_cents' => $this->cheaper($s['base_price'], 100),
+                'base_maintenance_cents' => $this->cheaper($s['base_maint'], 10),
                 'included_pages' => $s['included_pages'],
-                'per_page_price_cents' => $this->mxn($s['per_page']),
-                'per_language_price_cents' => $this->mxn($s['per_lang']),
+                'per_page_price_cents' => $this->cheaper($s['per_page'], 50),
+                'per_language_price_cents' => $this->cheaper($s['per_lang'], 50),
                 'default_timeline_days' => $s['timeline'],
                 'default_maintenance_plan_id' => null,
                 'is_active' => true, 'sort_order' => $s['sort_order'],
@@ -150,8 +158,8 @@ class CatalogSeeder extends Seeder
                 [
                     'name' => $name,
                     'category' => $category,
-                    'price_cents' => $this->mxn($build),
-                    'maintenance_cents' => $this->mxn($maint),
+                    'price_cents' => $this->cheaper($build, 50),
+                    'maintenance_cents' => $this->cheaper($maint, 10),
                     'price_type' => 'flat',
                     'applies_to' => $appliesTo,
                     'is_active' => true,
