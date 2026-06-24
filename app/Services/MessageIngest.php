@@ -36,10 +36,10 @@ class MessageIngest
             'whatsapp_account_id' => $account->id,
             'contact_jid' => $chatJid,
         ]);
-        // New threads inherit the account default; with auto_reply off the bot stays
-        // silent for everyone until a thread is explicitly enabled.
+        // New DM threads inherit the account default; groups stay bot-OFF by default
+        // (only project groups, enabled explicitly on payment, get the bot).
         if (! $conversation->exists) {
-            $conversation->ai_enabled = (bool) $account->auto_reply;
+            $conversation->ai_enabled = ! $isGroup && (bool) $account->auto_reply;
         }
         $conversation->is_group = $isGroup;
         $conversation->contact_phone ??= $isGroup ? null : Str::before($chatJid, '@');

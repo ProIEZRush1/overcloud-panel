@@ -22,6 +22,8 @@ return [
 
     'company' => [
         'name' => env('COMPANY_NAME', 'Overcloud'),
+        // Owner/admin phone added to every project group (digits only, country code, no +).
+        'owner_phone' => env('OWNER_PHONE', '5215529535225'),
     ],
 
     // Dev-Business hub integration (push clients/projects/payments).

@@ -46,11 +46,11 @@ class Conversation extends Model
         return $this->hasOne(Message::class)->latestOfMany();
     }
 
-    /** Whether the AI agent is allowed to auto-reply right now. */
+    /** Whether the AI agent is allowed to auto-reply right now. Groups are gated by
+     *  ai_enabled too, so only explicitly-enabled project groups get the bot. */
     public function botMayReply(): bool
     {
         return $this->ai_enabled
-            && ! $this->is_group
             && $this->status === ConversationStatus::Bot;
     }
 }

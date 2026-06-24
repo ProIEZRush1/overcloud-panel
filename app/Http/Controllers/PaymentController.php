@@ -44,7 +44,16 @@ class PaymentController extends Controller
             report($e);
         }
 
-        return back()->with('success', 'Pago verificado. El proyecto puede iniciar. 🚀');
+        // First payment verified → spin up the project + its WhatsApp work group.
+        try {
+            if ($payment->quote) {
+                app(\App\Services\ProjectService::class)->provisionFromQuote($payment->quote);
+            }
+        } catch (\Throwable $e) {
+            report($e);
+        }
+
+        return back()->with('success', 'Pago verificado. El proyecto inició y se creó el grupo de WhatsApp. 🚀');
     }
 
     public function reject(PaymentRequest $payment, PaymentService $service, Request $request)
