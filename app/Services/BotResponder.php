@@ -61,7 +61,8 @@ class BotResponder
         return match ($lead->stage) {
             LeadStage::New => $this->onNew($conversation, $lead),
             LeadStage::Qualifying => $this->onQualifying($conversation, $lead, $inbound, $text),
-            LeadStage::Spec, LeadStage::Quoted, LeadStage::Negotiating => $this->onQuoted($conversation, $lead, $text),
+            LeadStage::Spec => $this->onScope($conversation, $lead, $text),
+            LeadStage::Quoted, LeadStage::Negotiating => $this->onQuoted($conversation, $lead, $text),
             LeadStage::Accepted, LeadStage::AwaitingPayment => $this->onAwaitingPayment($conversation, $lead, $isMedia),
             default => $this->send($conversation, $this->claudeOr($conversation,
                 'Tu proyecto ya está en marcha ✅ Cualquier cambio o duda lo vemos por aquí o en tu grupo. 🙌')),
@@ -82,7 +83,7 @@ class BotResponder
         $lead = $lead->fresh();
 
         if ($lead->service_id && $this->wantsProposal($text)) {
-            return $this->sendProposal($conversation, $lead);
+            return $this->sendScope($conversation, $lead);
         }
 
         if (! $lead->service_id) {
@@ -117,12 +118,35 @@ class BotResponder
             'Quedo al pendiente de tu *comprobante* (foto o PDF) para verificar el anticipo y arrancar. 🙌');
     }
 
-    /** Generate + send the scope doc, then the quote. */
-    private function sendProposal(Conversation $conversation, Lead $lead): ?Message
+    /** Scope stage: wait for the client to confirm the alcance before quoting. */
+    private function onScope(Conversation $conversation, Lead $lead, string $text): ?Message
+    {
+        if ($this->isYes($text)) {
+            return $this->sendQuote($conversation, $lead);
+        }
+
+        return $this->send($conversation, $this->claudeOr($conversation,
+            'Con gusto ajusto lo que necesites del alcance 🙌 ¿Qué te gustaría cambiar o agregar? En cuanto me confirmes que está a tu gusto, te preparo la *cotización*.'));
+    }
+
+    /** Generate + send ONLY the detailed scope doc; the quote comes after the client OKs it. */
+    private function sendScope(Conversation $conversation, Lead $lead): ?Message
     {
         $spec = $this->specs->buildFromLead($lead);
         $this->pdf->renderSpec($spec);
+        $lead->update(['stage' => LeadStage::Spec]);
 
+        $this->send($conversation, '¡Perfecto! 🙌 Te preparé el *alcance detallado* de tu proyecto — objetivos, páginas, funciones, entregables y el proceso completo 📋');
+        $this->sendDoc($conversation, $spec->fresh()->pdf_path, 'Alcance.pdf');
+
+        return $this->send($conversation,
+            'Revísalo con calma 🙌 Si está todo a tu gusto, *confírmame* y con eso te preparo la cotización 💰. Si quieres ajustar o agregar algo, dime y lo acomodo.');
+    }
+
+    /** Build + send the quote once the client confirmed the scope. */
+    private function sendQuote(Conversation $conversation, Lead $lead): ?Message
+    {
+        $spec = $lead->specs()->latest()->first() ?? $this->specs->buildFromLead($lead);
         $quote = $this->quotes->buildFromLead($lead, $spec, [
             'feature_ids' => $this->defaultFeatures($lead->service),
             'pages' => $lead->pages ?: ($lead->service?->included_pages ?? 1),
@@ -132,12 +156,9 @@ class BotResponder
         $quote->update(['status' => QuoteStatus::Sent, 'sent_at' => now()]);
         $lead->update(['stage' => LeadStage::Quoted]);
 
-        $this->send($conversation, '¡Perfecto! 🙌 Primero el *alcance detallado* — todo lo que incluye tu proyecto (páginas, funciones y entregables) 📋');
-        $this->sendDoc($conversation, $spec->fresh()->pdf_path, 'Alcance.pdf');
-
         $m = fn ($v) => Money::format($v, $quote->currency);
         $this->send($conversation,
-            "Y aquí tu *cotización* 💰\n\n*{$quote->number}*\n• Total: ".$m($quote->total_cents)."\n• 40% para iniciar: ".$m($quote->deposit_cents)."\n• 30% al desplegar + 30% en la entrega final\n• Mantenimiento: ".$m($quote->maintenance_monthly_cents)."/mes\n\n¿La aprobamos? ✅");
+            "¡Excelente! 🙌 Con base en tu alcance, aquí tu *cotización* 💰\n\n*{$quote->number}*\n• Total: ".$m($quote->total_cents)."\n• 40% para iniciar: ".$m($quote->deposit_cents)."\n• 30% al desplegar + 30% en la entrega final\n• Mantenimiento: ".$m($quote->maintenance_monthly_cents)."/mes\n\n¿La aprobamos? ✅");
 
         return $this->sendDoc($conversation, $quote->fresh()->pdf_path, $quote->number.'.pdf');
     }

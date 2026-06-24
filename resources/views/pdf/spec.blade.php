@@ -16,6 +16,10 @@
     li { margin: 4px 0; }
     .muted { color: #6b7280; }
     .pill { display:inline-block; background:#f3f4f6; padding:3px 9px; border-radius:8px; margin:2px; font-size:11px; }
+    .item { margin: 7px 0; line-height: 1.4; }
+    .item b { color: #111827; }
+    ol { margin: 8px 0; padding-left: 20px; }
+    p { line-height: 1.5; }
     .foot { margin-top: 30px; text-align: center; color: #9ca3af; font-size: 10px; }
 </style>
 </head>
@@ -37,19 +41,38 @@
             @if($spec->lead->company) · {{ $spec->lead->company }} @endif
             · {{ $spec->lead->phone }}</div>
 
-        @if($spec->summary)
-            <h2>Resumen</h2>
-            <p>{{ $spec->summary }}</p>
+        @if($spec->content['overview'] ?? null)
+            <h2>Resumen ejecutivo</h2>
+            <p>{{ $spec->content['overview'] }}</p>
         @endif
 
-        <h2>Páginas / Secciones</h2>
-        <div>@foreach(($spec->content['pages'] ?? []) as $p)<span class="pill">{{ $p }}</span>@endforeach</div>
+        @if($spec->content['objectives'] ?? null)
+            <h2>Objetivos del proyecto</h2>
+            <ul>@foreach($spec->content['objectives'] as $o)<li>{{ $o }}</li>@endforeach</ul>
+        @endif
+
+        <h2>Páginas y secciones</h2>
+        @foreach(($spec->content['pages'] ?? []) as $p)
+            <div class="item"><b>{{ is_array($p) ? ($p['name'] ?? '') : $p }}</b>@if(is_array($p) && ! empty($p['desc'])) — {{ $p['desc'] }}@endif</div>
+        @endforeach
 
         <h2>Funcionalidades</h2>
-        <ul>@foreach(($spec->content['features'] ?? []) as $f)<li>{{ $f }}</li>@endforeach</ul>
+        @foreach(($spec->content['features'] ?? []) as $f)
+            <div class="item"><b>{{ is_array($f) ? ($f['name'] ?? '') : $f }}</b>@if(is_array($f) && ! empty($f['desc'])) — {{ $f['desc'] }}@endif</div>
+        @endforeach
 
         <h2>Entregables</h2>
         <ul>@foreach(($spec->content['deliverables'] ?? []) as $d)<li>{{ $d }}</li>@endforeach</ul>
+
+        @if($spec->content['technical'] ?? null)
+            <h2>Incluye (aspectos técnicos)</h2>
+            <ul>@foreach($spec->content['technical'] as $t)<li>{{ $t }}</li>@endforeach</ul>
+        @endif
+
+        @if($spec->content['process'] ?? null)
+            <h2>Proceso de trabajo</h2>
+            <ol>@foreach($spec->content['process'] as $p)<li>{{ $p }}</li>@endforeach</ol>
+        @endif
 
         <table style="width:100%; margin-top:18px;">
             <tr>
@@ -58,8 +81,13 @@
             </tr>
         </table>
 
+        @if($spec->content['out_of_scope'] ?? null)
+            <h2>No incluye</h2>
+            <ul>@foreach($spec->content['out_of_scope'] as $o)<li>{{ $o }}</li>@endforeach</ul>
+        @endif
+
         @if($spec->content['notes'] ?? null)
-            <h2>Notas</h2>
+            <h2>Notas adicionales</h2>
             <p>{{ $spec->content['notes'] }}</p>
         @endif
 
