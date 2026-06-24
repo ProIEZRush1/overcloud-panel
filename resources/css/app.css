@@ -171,21 +171,21 @@
     }
 }
 
-/* ── Overcloud brand (indigo) ── */
+/* ── Overcloud brand (violet — from the logo gradient) ── */
 :root {
-    --primary: hsl(243 75% 59%);
+    --primary: hsl(264 89% 59%);
     --primary-foreground: hsl(0 0% 100%);
-    --ring: hsl(243 75% 59%);
-    --sidebar-primary: hsl(243 75% 59%);
+    --ring: hsl(264 89% 59%);
+    --sidebar-primary: hsl(264 89% 59%);
     --sidebar-primary-foreground: hsl(0 0% 100%);
-    --sidebar-ring: hsl(243 75% 59%);
+    --sidebar-ring: hsl(264 89% 59%);
 }
 
 .dark {
-    --primary: hsl(243 80% 67%);
+    --primary: hsl(264 89% 68%);
     --primary-foreground: hsl(0 0% 100%);
-    --ring: hsl(243 80% 67%);
-    --sidebar-primary: hsl(243 80% 67%);
+    --ring: hsl(264 89% 68%);
+    --sidebar-primary: hsl(264 89% 68%);
     --sidebar-primary-foreground: hsl(0 0% 100%);
-    --sidebar-ring: hsl(243 80% 67%);
+    --sidebar-ring: hsl(264 89% 68%);
 }
