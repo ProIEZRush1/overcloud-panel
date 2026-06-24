@@ -14,7 +14,15 @@ php artisan storage:link || true
 php artisan cache:clear || true
 php artisan config:cache
 
+# Claude Code subscription credentials for the AI worker (written from env, never baked).
+if [ -n "$CLAUDE_CREDS_JSON" ]; then
+  mkdir -p /root/.claude
+  printf '%s' "$CLAUDE_CREDS_JSON" > /root/.claude/.credentials.json
+  chmod 600 /root/.claude/.credentials.json
+  echo "claude credentials written"
+fi
+
 # Background worker for WhatsApp bot replies + async jobs.
-php artisan queue:work --tries=1 --sleep=2 --timeout=120 >> storage/logs/worker.log 2>&1 &
+php artisan queue:work --tries=1 --sleep=2 --timeout=180 >> storage/logs/worker.log 2>&1 &
 
 exec php artisan serve --host 0.0.0.0 --port 8080
