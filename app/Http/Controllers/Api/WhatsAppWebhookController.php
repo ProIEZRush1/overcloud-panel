@@ -5,21 +5,23 @@ namespace App\Http\Controllers\Api;
 use App\Enums\MessageStatus;
 use App\Enums\WhatsAppAccountStatus;
 use App\Http\Controllers\Controller;
+use App\Jobs\GenerateBotReply;
 use App\Models\Message;
 use App\Models\WhatsAppAccount;
-use App\Services\BotResponder;
 use App\Services\MessageIngest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 
 class WhatsAppWebhookController extends Controller
 {
-    public function inbound(Request $request, MessageIngest $ingest, BotResponder $responder)
+    public function inbound(Request $request, MessageIngest $ingest)
     {
         $message = $ingest->handle($request->all());
 
+        // Queue the AI reply so the Claude Code CLI runs in the worker's
+        // login-shell context (PATH + keychain), never blocking the webhook.
         if ($message && $message->isInbound()) {
-            $responder->handle($message->conversation, $message);
+            GenerateBotReply::dispatch($message->id);
         }
 
         return response()->json(['ok' => true, 'message_id' => $message?->id]);

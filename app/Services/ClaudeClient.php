@@ -2,11 +2,12 @@
 
 namespace App\Services;
 
+use App\Contracts\Assistant;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 /** Minimal Anthropic Messages API client. Returns null when no key is configured. */
-class ClaudeClient
+class ClaudeClient implements Assistant
 {
     public function isEnabled(): bool
     {

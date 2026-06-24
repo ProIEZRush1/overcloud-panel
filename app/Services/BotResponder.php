@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Contracts\Assistant;
 use App\Enums\LeadStage;
 use App\Enums\MessageStatus;
 use App\Enums\MessageType;
@@ -17,7 +18,7 @@ use Illuminate\Support\Str;
 class BotResponder
 {
     public function __construct(
-        private ClaudeClient $claude,
+        private Assistant $assistant,
         private WhatsAppGateway $gateway,
     ) {}
 
@@ -64,7 +65,7 @@ class BotResponder
 
     private function composeWithClaude(Conversation $conversation): ?string
     {
-        if (! $this->claude->isEnabled()) {
+        if (! $this->assistant->isEnabled()) {
             return null;
         }
         $history = $conversation->messages()->latest()->limit(12)->get()->reverse()
@@ -77,7 +78,7 @@ class BotResponder
             ."Hablas español, eres cálido, breve y profesional. Tu objetivo: entender qué necesita el cliente, qué tipo de proyecto, cuántas páginas e idiomas, "
             ."si tiene logo/textos y para cuándo lo necesita, para luego preparar una propuesta. Haz una pregunta a la vez. No inventes precios todavía.";
 
-        return $this->claude->message($system, $history);
+        return $this->assistant->message($system, $history);
     }
 
     private function composeDeterministic(Conversation $conversation, Message $inbound): string

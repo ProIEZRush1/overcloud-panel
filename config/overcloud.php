@@ -7,11 +7,16 @@ return [
         'token' => env('WA_GATEWAY_TOKEN', 'change-me'),
     ],
 
-    // AI agent (Anthropic / Claude)
+    // AI assistant.
+    //   driver 'claude_code' → local Claude Code CLI (uses your subscription, NO API key)
+    //   driver 'api'         → Anthropic API (needs ANTHROPIC_API_KEY)
     'ai' => [
-        'key' => env('ANTHROPIC_API_KEY'),
-        'model' => env('AI_MODEL', 'claude-opus-4-8'),
+        'driver' => env('AI_DRIVER', 'claude_code'),
         'enabled' => (bool) env('AI_ENABLED', true),
+        'bin' => env('CLAUDE_BIN', 'claude'),
+        'model' => env('AI_MODEL', 'sonnet'),
+        'timeout' => (int) env('AI_TIMEOUT', 90),
+        'key' => env('ANTHROPIC_API_KEY'),
         'max_tokens' => (int) env('AI_MAX_TOKENS', 1500),
     ],
 

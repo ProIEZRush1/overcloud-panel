@@ -15,7 +15,11 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->bind(\App\Contracts\Assistant::class, function ($app) {
+            return config('overcloud.ai.driver') === 'api'
+                ? $app->make(\App\Services\ClaudeClient::class)
+                : $app->make(\App\Services\ClaudeCodeClient::class);
+        });
     }
 
     /**
