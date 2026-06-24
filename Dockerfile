@@ -2,8 +2,9 @@
 FROM php:8.4-cli AS app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libzip-dev libsqlite3-dev libonig-dev libpq-dev unzip git curl ca-certificates gnupg \
-    && docker-php-ext-install pdo pdo_mysql pdo_sqlite pdo_pgsql zip bcmath mbstring \
+        libzip-dev libsqlite3-dev libonig-dev libpq-dev libpng-dev libjpeg-dev libfreetype6-dev unzip git curl ca-certificates gnupg \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install pdo pdo_mysql pdo_sqlite pdo_pgsql zip bcmath mbstring gd \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && npm install -g @anthropic-ai/claude-code \
