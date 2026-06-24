@@ -11,6 +11,7 @@ mkdir -p storage/framework/cache storage/framework/sessions storage/framework/vi
 # Wait for the database, then migrate + seed (seeders are idempotent).
 php artisan migrate --force --seed
 php artisan storage:link || true
+php artisan cache:clear || true
 php artisan config:cache
 
 exec php artisan serve --host 0.0.0.0 --port 8080

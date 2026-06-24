@@ -16,9 +16,11 @@ class Setting extends Model
 
     public static function get(string $key, mixed $default = null): mixed
     {
-        $setting = Cache::rememberForever("setting:{$key}", fn () => static::where('key', $key)->first());
+        // Cache the scalar/array VALUE — never the Eloquent model (a serialized
+        // model deserializes to an incomplete object under a persistent cache).
+        $value = Cache::rememberForever("setting:{$key}", fn () => static::where('key', $key)->first()?->value);
 
-        return $setting?->value ?? $default;
+        return $value ?? $default;
     }
 
     public static function put(string $key, mixed $value, string $group = 'general'): self
