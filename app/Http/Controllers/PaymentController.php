@@ -14,7 +14,7 @@ class PaymentController extends Controller
     public function index()
     {
         $requests = PaymentRequest::with(['lead:id,uuid,name,phone', 'latestProof'])
-            ->orderByRaw("FIELD(status, 'proof_submitted', 'pending', 'verified', 'rejected')")
+            ->orderByRaw("CASE status WHEN 'proof_submitted' THEN 0 WHEN 'pending' THEN 1 WHEN 'verified' THEN 2 ELSE 3 END")
             ->latest()->get()
             ->map(fn (PaymentRequest $p) => [
                 'id' => $p->id,
