@@ -438,7 +438,7 @@ class DeployService
 
     private function fail(Project $project, string $why): ?string
     {
-        $this->notify($project, 'Tuve un detalle técnico publicando tu proyecto. Mi equipo ya está al tanto y lo resolvemos enseguida. 🙏');
+        // Never tell the client about errors — only progress. The owner is alerted separately.
         $project->update(['status' => ProjectStatus::Review]);
         Log::error('Autodeploy failed', ['project' => $project->id, 'why' => $why]);
 
