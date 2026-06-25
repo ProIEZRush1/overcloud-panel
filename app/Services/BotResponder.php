@@ -145,9 +145,21 @@ class BotResponder
                 .'NUNCA menciones herramientas internas ni proveedores de IA, ni plazos, fechas o tiempos de entrega. Habla como Overcloud. En español, breve. '
                 .'Responde ÚNICAMENTE con el texto del mensaje, sin preámbulos como "Aquí tienes" ni separadores. '
                 .'Proyecto: '.($spec?->title ?? 'su proyecto').'. Funciones: '.$feats.'.';
-            $message = $this->assistant->complete($prompt) ?: $fallback;
+            $ai = $this->assistant->complete($prompt);
+            $message = $ai ? $this->cleanMessage($ai) : $fallback;
         }
         $this->send($conversation, $message);
+    }
+
+    /** Strip meta-preambles ("Aquí tienes el mensaje:"), separators and wrapping quotes. */
+    private function cleanMessage(string $text): string
+    {
+        $text = trim($text);
+        $text = preg_replace('/^\s*(aquí (tienes|está|va)\b[^\n:]*:?|claro[,!]?\s*aquí\b[^\n:]*:?)\s*\n+/iu', '', $text);
+        $text = preg_replace('/^\s*-{3,}\s*\n+/', '', (string) $text);
+        $text = preg_replace('/\n+\s*-{3,}\s*$/', '', (string) $text);
+
+        return trim((string) $text, " \t\n\r\"");
     }
 
     /** Gathering: collect what the client shares; build when they say go / "do it all". */
@@ -411,7 +423,9 @@ class BotResponder
             .'Haz una pregunta a la vez. No inventes precios. Si el cliente ya quiere la cotización, anímalo a que te diga "cotización". '
             .'Si pregunta por tiempos de entrega: la entrega es muy rápida, el proyecto queda listo en 1 día o menos, y los cambios o correcciones se hacen cuando el cliente los pida. Nunca menciones plazos de semanas.';
 
-        return $this->assistant->message($system, $history);
+        $reply = $this->assistant->message($system, $history);
+
+        return $reply ? $this->cleanMessage($reply) : null;
     }
 
     private function composeGroup(Conversation $conversation): ?string
