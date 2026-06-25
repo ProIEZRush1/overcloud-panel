@@ -37,12 +37,12 @@ class ApplyChange implements ShouldQueue
 
         $ok = $deploy->applyChange($project, $this->instruction);
 
+        // Only tell the client on success — never surface an error to them.
         $conv = $project->lead?->conversations()->where('is_group', false)->first();
         $account = $conv?->whatsappAccount;
-        if ($conv && $account) {
-            $gateway->sendText($account->session_name, $conv->contact_jid, $ok
-                ? "¡Listo! ✅ Ya apliqué el cambio en tu sitio:\n{$project->prod_url}\n\n¿Algo más en lo que te ayude? 🙌"
-                : 'Tuve un detalle aplicando el cambio; mi equipo lo revisa y te confirmo enseguida. 🙏');
+        if ($ok && $conv && $account) {
+            $gateway->sendText($account->session_name, $conv->contact_jid,
+                "¡Listo! ✅ Ya apliqué el cambio en tu sitio:\n{$project->prod_url}\n\n¿Algo más en lo que te ayude? 🙌");
         }
     }
 }
