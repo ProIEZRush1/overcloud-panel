@@ -132,7 +132,8 @@ class BotResponder
     /** Generate + send ONLY the detailed scope doc; the quote comes after the client OKs it. */
     private function sendScope(Conversation $conversation, Lead $lead): ?Message
     {
-        $spec = $this->specs->buildFromLead($lead);
+        $this->captureLeadDetails($conversation, $lead);
+        $spec = $this->specs->buildFromLead($lead->fresh());
         $this->pdf->renderSpec($spec);
         $lead->update(['stage' => LeadStage::Spec]);
 
@@ -141,6 +142,34 @@ class BotResponder
 
         return $this->send($conversation,
             'Revísalo con calma 🙌 Si está todo a tu gusto, *confírmame* y con eso te preparo la cotización 💰. Si quieres ajustar o agregar algo, dime y lo acomodo.');
+    }
+
+    /** Extract the business name + need from the chat (once) so the scope, quote and site are tailored. */
+    private function captureLeadDetails(Conversation $conversation, Lead $lead): void
+    {
+        if ($lead->company && $lead->summary) {
+            return;
+        }
+        $chat = $conversation->messages()->where('is_from_me', false)->latest()->take(10)->get()
+            ->reverse()->pluck('body')->filter()->implode("\n");
+        if ($chat === '') {
+            return;
+        }
+        try {
+            $raw = $this->assistant->message(
+                'Extrae datos del negocio del cliente de esta conversación de WhatsApp. Responde SOLO con JSON válido: '
+                .'{"company":"<nombre del negocio, o vacío si no lo dijo>","summary":"<en 1-2 frases qué quiere construir>"}.',
+                [['role' => 'user', 'content' => $chat]]
+            );
+            if (preg_match('/\{.*\}/s', (string) $raw, $m) && is_array($data = json_decode($m[0], true))) {
+                $lead->update(array_filter([
+                    'company' => $lead->company ?: ($data['company'] ?? null),
+                    'summary' => $lead->summary ?: ($data['summary'] ?? null),
+                ]));
+            }
+        } catch (\Throwable $e) {
+            // best-effort; scope/content fall back to generic
+        }
     }
 
     /** Build + send the quote once the client confirmed the scope. */
@@ -181,7 +210,7 @@ class BotResponder
         $snap = $pr->bank_details_snapshot ?? [];
         $m = fn ($v) => Money::format($v, $pr->currency);
 
-        $msg = "¡Excelente decisión! 🎉 Para arrancar, transfiere el *40% de anticipo*: ".$m($pr->amount_cents)."\n\n";
+        $msg = '¡Excelente decisión! 🎉 Para arrancar, transfiere el *40% de anticipo*: '.$m($pr->amount_cents)."\n\n";
         $msg .= '🏦 '.($snap['bank'] ?? '')."\n👤 ".($snap['beneficiary'] ?? '')."\n";
         if (! empty($snap['account_number'])) {
             $msg .= '#️⃣ Cuenta: '.$snap['account_number']."\n";
@@ -213,7 +242,7 @@ class BotResponder
 
     private function isYes(string $text): bool
     {
-        return Str::contains($text, ['aprob', 'acepto', 'adelante', 'dale', 'sí', 'claro', 'ok', 'okay', 'perfecto', 'me late', 'procede', 'va pues', 'hágale', 'hagale']);
+        return Str::contains($text, ['aprob', 'aprueb', 'acept', 'adelante', 'dale', 'sí', 'si,', 'claro', 'ok', 'okay', 'perfecto', 'me late', 'procede', 'de acuerdo', 'va pues', 'hágale', 'hagale', 'confirm']);
     }
 
     private function detectService($lead, string $text): void
