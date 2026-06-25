@@ -39,12 +39,23 @@ class GenerateBotReply implements ShouldQueue
         }
 
         $message = Message::with('conversation.whatsappAccount', 'conversation.lead')->find($this->messageId);
-
-        if ($message) {
-            // Make the message readable: voice notes → text, images → description.
-            $transcriber->transcribe($message);
-            $vision->describe($message);
-            $responder->handle($message->conversation, $message->fresh());
+        if (! $message) {
+            return;
         }
+
+        // Debounce fragmented messages ("Pero", "T", "R"…): if the client already sent a newer
+        // message, skip this one — the latest message's job produces ONE combined reply.
+        $hasNewer = Message::where('conversation_id', $message->conversation_id)
+            ->where('is_from_me', false)
+            ->where('id', '>', $message->id)
+            ->exists();
+        if ($hasNewer) {
+            return;
+        }
+
+        // Make the message readable: voice notes → text, images → description.
+        $transcriber->transcribe($message);
+        $vision->describe($message);
+        $responder->handle($message->conversation, $message->fresh());
     }
 }

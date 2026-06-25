@@ -21,7 +21,8 @@ class WhatsAppWebhookController extends Controller
         // Queue the AI reply so the Claude Code CLI runs in the worker's
         // login-shell context (PATH + keychain), never blocking the webhook.
         if ($message && $message->isInbound() && $message->wasRecentlyCreated) {
-            GenerateBotReply::dispatch($message->id);
+            // Small delay so rapid fragmented messages accumulate; the job replies once to the latest.
+            GenerateBotReply::dispatch($message->id)->delay(now()->addSeconds(7));
         }
 
         return response()->json(['ok' => true, 'message_id' => $message?->id]);
