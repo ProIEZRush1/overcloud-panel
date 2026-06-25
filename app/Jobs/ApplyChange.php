@@ -24,7 +24,7 @@ class ApplyChange implements ShouldQueue
 
     public int $tries = 1;
 
-    public int $timeout = 900;
+    public int $timeout = 1800;
 
     public function __construct(public int $projectId, public string $instruction) {}
 

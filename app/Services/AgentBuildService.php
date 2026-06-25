@@ -49,11 +49,16 @@ class AgentBuildService
     private function run(Project $project, string $dir, string $prompt): bool
     {
         File::ensureDirectoryExists($dir);
+        @chmod($dir, 0777); // the non-root builder user must be able to write here
         try {
-            $r = Process::path($dir)->timeout((int) config('overcloud.deploy.build_timeout', 1500))
-                ->run(['claude', '-p', $prompt, '--dangerously-skip-permissions', '--output-format', 'json']);
+            // Claude Code refuses --dangerously-skip-permissions as root, so run it as the
+            // non-root 'builder' user (created by the container entrypoint).
+            $inner = 'cd '.escapeshellarg($dir).' && HOME=/home/builder claude -p '.escapeshellarg($prompt)
+                .' --dangerously-skip-permissions --output-format json';
+            $r = Process::timeout((int) config('overcloud.deploy.build_timeout', 1500))
+                ->run(['su', 'builder', '-c', $inner]);
             if (! $r->successful()) {
-                Log::warning('Claude build failed', ['project' => $project->id, 'err' => mb_substr($r->errorOutput(), 0, 300)]);
+                Log::warning('Claude build failed', ['project' => $project->id, 'err' => mb_substr($r->errorOutput() ?: $r->output(), 0, 400)]);
 
                 return false;
             }

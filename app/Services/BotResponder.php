@@ -142,7 +142,8 @@ class BotResponder
                 .'Escribe UN mensaje de WhatsApp, cálido y profesional, pidiéndole TODO lo que necesitas de él para construir su proyecto: contenido y textos, '
                 .'fotos/logo, datos del negocio, y accesos o llaves si aplica (por ejemplo pasarela de pagos o servicios externos). '
                 .'Ofrécele claramente 3 opciones: que te los pase, que le des instrucciones paso a paso, o que TÚ te encargas de todo por él. '
-                .'NUNCA menciones herramientas internas ni proveedores de IA. Habla como Overcloud. En español, breve. '
+                .'NUNCA menciones herramientas internas ni proveedores de IA, ni plazos, fechas o tiempos de entrega. Habla como Overcloud. En español, breve. '
+                .'Responde ÚNICAMENTE con el texto del mensaje, sin preámbulos como "Aquí tienes" ni separadores. '
                 .'Proyecto: '.($spec?->title ?? 'su proyecto').'. Funciones: '.$feats.'.';
             $message = $this->assistant->complete($prompt) ?: $fallback;
         }
