@@ -124,8 +124,10 @@ class BotResponder
                 '¡Recibí tu comprobante! 🙌 Verifico tu pago y, en cuanto quede aprobado, te creo tu *grupo de proyecto* y arrancamos. 🚀');
         }
 
-        return $this->send($conversation,
-            'Quedo al pendiente de tu *comprobante* (foto o PDF) para verificar el anticipo y arrancar. 🙌');
+        // Don't robot-repeat: engage with whatever the client says (questions, extra details,
+        // requirements) and only gently remind about the deposit proof.
+        return $this->send($conversation, $this->claudeOr($conversation,
+            'Lo anoto 🙌 Cuando tengas listo el *comprobante* del anticipo (foto o PDF), mándamelo y arrancamos. Cualquier otro detalle, aquí estoy.'));
     }
 
     /** Public: after payment, ask the client for everything we need to build (Overcloud-branded). */
@@ -483,7 +485,9 @@ class BotResponder
             .'Haz MÁXIMO 1 o 2 preguntas breves para entender el proyecto; en cuanto tengas una idea general, di que le preparas su *alcance* enseguida y no sigas preguntando. No inventes precios. '
             .'Si el cliente propone otra forma de pago o alguna condición distinta (no le acomodan los pagos en partes, quiere otro esquema, etc.), NO la rechaces: dile que lo revisas con el equipo y le confirmas en breve si se puede — que ya lo están considerando. '
             .'Si el cliente comparte un enlace de referencia (su sitio actual, un ejemplo, etc.), agradécelo y dile que lo revisarás a fondo para tomarlo de base. '
-            .'Si pregunta por tiempos de entrega: la entrega es muy rápida, el proyecto queda listo en 1 día o menos, y los cambios o correcciones se hacen cuando el cliente los pida. Nunca menciones plazos de semanas.';
+            .'Si pregunta por tiempos de entrega: la entrega es muy rápida, el proyecto queda listo en 1 día o menos, y los cambios o correcciones se hacen cuando el cliente los pida. Nunca menciones plazos de semanas. '
+            .'RESPONDE SIEMPRE sus dudas (no las esquives ni repitas lo mismo). Sobre la *mensualidad*: es OPCIONAL — es para cambios y soporte continuos; puede tomar solo el proyecto como *pago único* sin mensualidad. Si un mes no la paga, su sitio/app sigue en línea, solo ese mes no entran cambios y la retoma cuando quiera, sin penalización. '
+            .'Si pide funciones extra (ej. un botón para hablar directo con él, un menú de servicios, etc.), dile que con gusto se incluyen y las anotas. Sé concreto y cálido; jamás repitas la misma frase dos veces.';
 
         $reply = $this->assistant->message($system, $history);
 
@@ -518,6 +522,12 @@ class BotResponder
 
     private function send(Conversation $conversation, string $text): Message
     {
+        // Permanent anti-spam guard: never send the client the SAME message twice in a row.
+        $lastBot = $conversation->messages()->where('is_from_me', true)->latest()->first();
+        if ($lastBot && trim((string) $lastBot->body) === trim($text)) {
+            return $lastBot;
+        }
+
         $out = $conversation->messages()->create([
             'direction' => MessageDirection::Out,
             'type' => MessageType::Text,
