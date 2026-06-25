@@ -47,4 +47,9 @@ class ClaudeClient implements Assistant
             return null;
         }
     }
+
+    public function complete(string $prompt, ?int $maxTokens = null): ?string
+    {
+        return $this->message('Responde exactamente lo solicitado, sin texto adicional.', [['role' => 'user', 'content' => $prompt]], $maxTokens);
+    }
 }

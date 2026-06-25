@@ -156,10 +156,10 @@ class BotResponder
             return;
         }
         try {
-            $raw = $this->assistant->message(
+            $raw = $this->assistant->complete(
                 'Extrae datos del negocio del cliente de esta conversación de WhatsApp. Responde SOLO con JSON válido: '
-                .'{"company":"<nombre del negocio, o vacío si no lo dijo>","summary":"<en 1-2 frases qué quiere construir>"}.',
-                [['role' => 'user', 'content' => $chat]]
+                .'{"company":"<nombre del negocio, o vacío si no lo dijo>","summary":"<en 1-2 frases qué quiere construir>"}.'
+                ."\n\nConversación:\n".$chat
             );
             if (preg_match('/\{.*\}/s', (string) $raw, $m) && is_array($data = json_decode($m[0], true))) {
                 $lead->update(array_filter([

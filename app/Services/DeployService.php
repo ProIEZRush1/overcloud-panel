@@ -136,6 +136,14 @@ class DeployService
                 return ['ok' => false, 'reason' => "falta '{$m}'"];
             }
         }
+        // Web stacks render content into the served HTML (Inertia props / SSR) — confirm
+        // the real business content is present, not a generic error/placeholder page.
+        if (($stack['kind'] ?? 'web') === 'web') {
+            $biz = (string) ($content['business'] ?? '');
+            if ($biz !== '' && ! Str::contains($html, $biz) && ! Str::contains($html, 'Overcloud')) {
+                return ['ok' => false, 'reason' => 'contenido no presente'];
+            }
+        }
 
         return ['ok' => true, 'reason' => 'ok'];
     }
@@ -186,7 +194,7 @@ class DeployService
             if ($spec) {
                 $ctx .= ' Secciones: '.collect($spec->content['pages'] ?? [])->map(fn ($p) => is_array($p) ? ($p['name'] ?? '') : $p)->implode(', ').'.';
             }
-            $raw = $this->assistant->message($system, [['role' => 'user', 'content' => $ctx]]);
+            $raw = $this->assistant->complete($system."\n\n".$ctx);
             $arr = json_decode($this->extractJson($raw) ?? '', true);
             if (is_array($arr) && ! empty($arr['business'])) {
                 $arr = array_merge($default, $arr);

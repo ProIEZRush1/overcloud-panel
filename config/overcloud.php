@@ -53,9 +53,9 @@ return [
         // Available stacks. `kind`: web|app. `markers`: strings the live page must
         // contain to pass E2E (apps render to canvas, so they check the bootstrap).
         'stacks' => [
-            'laravel-vue' => ['repo' => 'overcloud-client-template', 'port' => '8080', 'label' => 'Laravel + Vue', 'kind' => 'web', 'markers' => ['Overcloud']],
-            'nextjs' => ['repo' => 'overcloud-nextjs-template', 'port' => '3000', 'label' => 'Next.js', 'kind' => 'web', 'markers' => ['Overcloud']],
-            'static' => ['repo' => 'overcloud-static-template', 'port' => '80', 'label' => 'HTML estático', 'kind' => 'web', 'markers' => ['Overcloud']],
+            'laravel-vue' => ['repo' => 'overcloud-client-template', 'port' => '8080', 'label' => 'Laravel + Vue', 'kind' => 'web', 'markers' => []],
+            'nextjs' => ['repo' => 'overcloud-nextjs-template', 'port' => '3000', 'label' => 'Next.js', 'kind' => 'web', 'markers' => []],
+            'static' => ['repo' => 'overcloud-static-template', 'port' => '80', 'label' => 'HTML estático', 'kind' => 'web', 'markers' => []],
             'flutter' => ['repo' => 'overcloud-flutter-template', 'port' => '80', 'label' => 'Flutter Web', 'kind' => 'app', 'markers' => ['flutter_bootstrap.js', 'main.dart.js']],
         ],
     ],

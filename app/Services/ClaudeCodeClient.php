@@ -68,6 +68,42 @@ class ClaudeCodeClient implements Assistant
         }
     }
 
+    /** Raw completion for structured output (JSON, extraction) — no conversational wrapper. */
+    public function complete(string $prompt, ?int $maxTokens = null): ?string
+    {
+        if (! $this->isEnabled()) {
+            return null;
+        }
+
+        $process = new Process(
+            [
+                config('overcloud.ai.bin'),
+                '-p', $prompt,
+                '--model', (string) config('overcloud.ai.model', 'sonnet'),
+            ],
+            base_path(),
+            $this->processEnv(),
+            null,
+            (float) config('overcloud.ai.timeout', 120),
+        );
+
+        try {
+            $process->run();
+            if (! $process->isSuccessful()) {
+                Log::warning('Claude Code complete failed', ['err' => mb_substr($process->getErrorOutput(), 0, 400)]);
+
+                return null;
+            }
+            $out = trim($process->getOutput());
+
+            return $out !== '' ? $out : null;
+        } catch (\Throwable $e) {
+            Log::warning('Claude Code complete errored', ['e' => $e->getMessage()]);
+
+            return null;
+        }
+    }
+
     /** Ensure HOME (for ~/.claude credentials) and PATH are present even under php-fpm. */
     private function processEnv(): array
     {
