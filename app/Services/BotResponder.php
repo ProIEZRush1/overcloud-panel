@@ -261,9 +261,8 @@ class BotResponder
         $quote->update(['status' => QuoteStatus::Sent, 'sent_at' => now()]);
         $lead->update(['stage' => LeadStage::Quoted]);
 
-        $m = fn ($v) => Money::format($v, $quote->currency);
         $this->send($conversation,
-            "¡Excelente! 🙌 Con base en tu alcance, aquí tu *cotización* 💰\n\n*{$quote->number}*\n• Total: ".$m($quote->total_cents)."\n• 40% para iniciar: ".$m($quote->deposit_cents)."\n• 30% al desplegar + 30% en la entrega final\n• Mantenimiento: ".$m($quote->maintenance_monthly_cents)."/mes\n\n¿La aprobamos? ✅");
+            "¡Excelente! 🙌 Con base en tu alcance, aquí tu *cotización* 💰\n\nEn el PDF (*{$quote->number}*) vienen todos los detalles y el plan de pagos. Revísala con calma y, si te late, *apruébala* para arrancar. ✅");
 
         return $this->sendDoc($conversation, $quote->fresh()->pdf_path, $quote->number.'.pdf');
     }
@@ -368,7 +367,8 @@ class BotResponder
         $history = $this->history($conversation);
         $system = 'Eres el asistente de ventas de Overcloud, una agencia que crea páginas, sitios web, tiendas en línea y apps a precios accesibles. '
             .'Hablas español, cálido, breve y profesional. Tu objetivo: entender qué necesita el cliente (tipo de proyecto, páginas, idiomas, si tiene logo/textos) para preparar una propuesta. '
-            .'Haz una pregunta a la vez. No inventes precios. Si el cliente ya quiere la cotización, anímalo a que te diga "cotización".';
+            .'Haz una pregunta a la vez. No inventes precios. Si el cliente ya quiere la cotización, anímalo a que te diga "cotización". '
+            .'Si pregunta por tiempos de entrega: la entrega es muy rápida, el proyecto queda listo en 1 día o menos, y los cambios o correcciones se hacen cuando el cliente los pida. Nunca menciones plazos de semanas.';
 
         return $this->assistant->message($system, $history);
     }

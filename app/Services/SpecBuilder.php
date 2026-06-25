@@ -33,7 +33,7 @@ class SpecBuilder
         $content = $this->generateScope($lead, $service) ?? $this->fallbackScope($lead, $service, $pages);
         $content['service'] = $service->name;
         $content['languages'] = $languages;
-        $content['timeline_days'] = $content['timeline_days'] ?? $service->default_timeline_days;
+        unset($content['timeline_days']); // no plazos: la entrega es muy rápida
         $content['notes'] = $content['notes'] ?? $lead->summary;
 
         $spec = $lead->specs()->create([
@@ -63,7 +63,7 @@ class SpecBuilder
             .'(Stripe), panel de administración, gestión de pedidos, cuentas de cliente e inventario; una plataforma de gestión lleva su panel, roles, '
             .'reportes, etc. Adáptalo a ESTE negocio en específico, sé concreto. Responde ÚNICAMENTE con JSON válido (sin ```), en español, así: '
             .'{"overview":"<2-3 frases>","objectives":["..."],"pages":[{"name":"","desc":""}],"features":[{"name":"","desc":""}],'
-            .'"deliverables":["..."],"technical":["..."],"process":["..."],"out_of_scope":["..."],"timeline_days":<entero de días>}.'
+            .'"deliverables":["..."],"technical":["..."],"process":["..."],"out_of_scope":["..."]}. No incluyas plazos ni tiempos de entrega.'
             ."\n\nTipo de proyecto: ".$service->name.'. Negocio: '.($lead->company ?: ($lead->name ?: 'sin nombre'))
             .".\nLo que pidió el cliente:\n".$this->conversationContext($lead);
 

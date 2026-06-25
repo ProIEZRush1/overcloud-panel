@@ -77,7 +77,7 @@
         <table style="width:100%; margin-top:18px;">
             <tr>
                 <td><span class="muted">Idiomas:</span> {{ implode(', ', $spec->content['languages'] ?? ['es']) }}</td>
-                <td><span class="muted">Tiempo estimado:</span> {{ $spec->content['timeline_days'] ?? '—' }} días</td>
+                <td><span class="muted">Entrega:</span> ágil — los cambios se hacen cuando los pidas.</td>
             </tr>
         </table>
 
