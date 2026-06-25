@@ -403,8 +403,10 @@ class DeployService
     {
         $remote = "https://x-access-token:{$c['github_token']}@github.com/{$c['github_owner']}/{$name}.git";
         try {
+            // chmod -R so the non-root 'builder' user can edit the cloned files.
             return Process::timeout(150)->run(['bash', '-lc',
-                'rm -rf '.escapeshellarg($dir).' && git clone -q '.escapeshellarg($remote).' '.escapeshellarg($dir)])->successful();
+                'rm -rf '.escapeshellarg($dir).' && git clone -q '.escapeshellarg($remote).' '.escapeshellarg($dir)
+                .' && chmod -R 0777 '.escapeshellarg($dir)])->successful();
         } catch (\Throwable $e) {
             Log::warning('cloneRepo failed', ['e' => $e->getMessage()]);
 
