@@ -50,6 +50,12 @@ return [
         'max_attempts' => (int) env('AUTODEPLOY_MAX_ATTEMPTS', 5),
         'default_stack' => env('DEFAULT_STACK', 'laravel-vue'),
 
+        // Custom domains under overcloud.us via Cloudflare (falls back to sslip.io if unset).
+        'cloudflare_token' => env('CLOUDFLARE_TOKEN'),
+        'cloudflare_zone' => env('CLOUDFLARE_ZONE'),
+        'base_domain' => env('DEPLOY_BASE_DOMAIN', 'overcloud.us'),
+        'server_ip' => env('DEPLOY_SERVER_IP', '93.127.142.243'),
+
         // Available stacks. `kind`: web|app. `markers`: strings the live page must
         // contain to pass E2E (apps render to canvas, so they check the bootstrap).
         'stacks' => [

@@ -89,6 +89,13 @@ class DeployService
         // Inject any credentials the client shared (Stripe, API keys, …) into the app env.
         $this->applyEnv($c, $uuid, (array) ($brief['env'] ?? []));
 
+        // Nice domain under overcloud.us (falls back to the default sslip.io if Cloudflare unset).
+        $nice = $this->assignDomain($c, $uuid, Str::slug($project->lead?->company ?: $project->lead?->name ?: 'sitio'));
+        if ($nice) {
+            $url = $nice;
+            $project->update(['prod_url' => $url, 'domain' => $url]);
+        }
+
         $this->notify($project, "¡Ya casi! 🚀 Estoy publicando {$label} en línea y revisando que todo funcione bien...");
 
         // Self-heal: deploy -> wait for the build -> E2E verify the LIVE URL (the source
@@ -137,6 +144,12 @@ class DeployService
         [$uuid, $url] = $this->createApp($c, $name, '8080');
         if (! $uuid) {
             return null;
+        }
+
+        // Nice demo domain under overcloud.us.
+        $nice = $this->assignDomain($c, $uuid, Str::slug($lead->company ?: $lead->name ?: 'sitio').'-demo');
+        if ($nice) {
+            $url = $nice;
         }
 
         $stack = ['kind' => 'web', 'markers' => []];
@@ -346,6 +359,44 @@ class DeployService
     }
 
     /** Inject client-provided credentials into the Coolify app's environment. */
+    /** Point a subdomain under base_domain at the server (Cloudflare) + attach it to the Coolify app. */
+    private function assignDomain(array $c, string $appUuid, string $subdomain): ?string
+    {
+        if (empty($c['cloudflare_token']) || empty($c['cloudflare_zone'])) {
+            return null; // no Cloudflare configured → keep the default sslip.io domain
+        }
+        $sub = $subdomain;
+        if (! $this->createDns($c, $sub)) {
+            $sub = $subdomain.'-'.Str::lower(Str::random(4));
+            if (! $this->createDns($c, $sub)) {
+                return null;
+            }
+        }
+        $fqdn = $sub.'.'.$c['base_domain'];
+        try {
+            $r = Http::withToken($c['coolify_token'])->timeout(30)
+                ->patch($c['coolify_url']."/applications/{$appUuid}", ['domains' => "https://{$fqdn}"]);
+
+            return $r->successful() ? "https://{$fqdn}" : null;
+        } catch (\Throwable $e) {
+            Log::warning('assignDomain failed', ['e' => $e->getMessage()]);
+
+            return null;
+        }
+    }
+
+    private function createDns(array $c, string $sub): bool
+    {
+        try {
+            return (bool) Http::withToken($c['cloudflare_token'])->timeout(20)
+                ->post("https://api.cloudflare.com/client/v4/zones/{$c['cloudflare_zone']}/dns_records", [
+                    'type' => 'A', 'name' => $sub, 'content' => $c['server_ip'], 'ttl' => 120, 'proxied' => false,
+                ])->json('success');
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
     private function applyEnv(array $c, string $uuid, array $env): void
     {
         if (! $env) {
