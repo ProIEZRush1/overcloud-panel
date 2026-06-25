@@ -9,9 +9,11 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 
 /**
- * On-demand builder for the hybrid's escalation path: when the fast template path
- * doesn't fit (a project flagged custom, a novel stack, or a build that won't pass
- * E2E), Claude Code builds/repairs the project from scratch on the server. The
+ * On-demand builder. Instead of a one-shot `claude -p`, it opens a full agentic
+ * Claude Code session in the build dir: a rich CLAUDE.md gives it the whole project
+ * context (business, scope, brand + image rules) and a VERIFICATION PROTOCOL — the
+ * agent builds/edits, serves the site locally (php -S), checks it with curl, fixes,
+ * and only finishes once everything (and any requested change) is verified. The
  * DeployService harness still owns push + deploy + verify-until-live around it.
  */
 class AgentBuildService
@@ -25,58 +27,65 @@ class AgentBuildService
         }
     }
 
-    /** Build the project from scratch into $dir. Returns true on success. */
+    /** Build the project from scratch into $dir. */
     public function build(Project $project, string $stack, array $content, string $dir): bool
     {
-        return $this->run($project->id, $dir, $this->buildPrompt($project, $stack, $content));
+        return $this->run($project->id, $dir, $this->context($project->lead, 'build'),
+            'Construye el SITIO WEB COMPLETO, pulido y desplegable siguiendo CLAUDE.md. Crea todas las páginas necesarias con contenido realista del negocio '
+            .'(si es tienda: catálogo con precios y carrito funcional en JS). Sigue el PROTOCOLO DE VERIFICACIÓN antes de terminar.');
     }
 
     /** Repair a project that failed to build/serve, using the deploy logs. */
     public function repair(Project $project, string $stack, string $dir, string $logs): bool
     {
-        return $this->run($project->id, $dir, $this->repairPrompt($stack, $logs));
+        return $this->run($project->id, $dir, $this->context($project->lead, 'repair'),
+            "El despliegue falló. Logs del build/runtime:\n".mb_substr($logs, 0, 4000)
+            ."\n\nDiagnostica la causa, CORRIGE los archivos y verifica (PROTOCOLO DE VERIFICACIÓN de CLAUDE.md) que ya sirve bien.");
     }
 
     /** Apply a client-requested change to an existing project checkout. */
     public function change(Project $project, string $dir, string $instruction): bool
     {
-        $prompt = 'Aplica EXACTAMENTE este cambio solicitado por el cliente al proyecto en el directorio actual: "'.$instruction.'". '
-            .'Identifica con precisión el elemento exacto que menciona (p. ej. "botón flotante de WhatsApp" = el botón fijo/flotante de WhatsApp, normalmente abajo a la derecha) '
-            .'y aplica el cambio en TODOS los archivos relevantes (HTML y CSS). Si es un color, cambia el valor del color de ESE elemento en el CSS. '
-            .'Antes de terminar, VERIFICA leyendo los archivos que el cambio realmente quedó reflejado (busca el valor nuevo). '
-            .'Conserva el resto del sitio funcionando, mantén el footer "Desarrollado por Overcloud", el Dockerfile y la configuración de despliegue. '
-            .'Si el cambio afecta los assets (CSS/JS), reconstrúyelos para que queden horneados. NO hagas git push ni despliegues; solo edita los archivos.';
-
-        return $this->run($project->id, $dir, $prompt);
+        return $this->run($project->id, $dir, $this->context($project->lead, 'change'),
+            'Aplica este cambio solicitado por el cliente: "'.$instruction.'". '
+            .'Sigue el PROTOCOLO DE VERIFICACIÓN de CLAUDE.md: primero EXPLORA el repo (ls/grep/cat) para ubicar el elemento EXACTO, aplícalo en todos los archivos relevantes, '
+            .'y CONFIRMA sirviendo el sitio que el cambio realmente quedó reflejado. No termines hasta verificarlo.');
     }
 
     /** Build a simple one-page visual demo for a lead (shown before the quote). */
     public function buildDemo(Lead $lead, string $dir): bool
     {
-        $who = $lead->company ?: ($lead->name ?: 'el negocio');
-        $spec = $lead->specs()->latest()->first();
-        $features = collect($spec?->content['features'] ?? [])
-            ->map(fn ($f) => is_array($f) ? ($f['name'] ?? '') : $f)->filter()->implode(', ');
-        $prompt = "Construye un DEMO visual de UNA sola página (index.html, styles.css y script.js si ayuda) para «{$who}». "
-            .'Es un demo para que el cliente VEA cómo se vería su proyecto y se enamore — no necesita backend ni ser 100% funcional, pero debe verse increíble. '
-            .'Necesidad del cliente: '.($lead->summary ?? 'sitio profesional').'. Muestra visualmente: '.($features !== '' ? $features : 'las secciones principales').'. '
-            .'Diseño moderno, atractivo y responsivo, en español. '
-            .$this->imageRules()
-            .'OBLIGATORIO: footer "Desarrollado por Overcloud" enlazando https://wa.me/5215594356241. '
-            .'Incluye un Dockerfile que sirva los archivos estáticos en el puerto 8080: FROM python:3-alpine / WORKDIR /app / COPY . /app / EXPOSE 8080 / CMD ["python","-m","http.server","8080"]. '
-            .'Escribe TODOS los archivos COMPLETOS en el directorio actual AHORA, no expliques. NO hagas git push ni despliegues.';
-
-        return $this->run($lead->id, $dir, $prompt);
+        return $this->run($lead->id, $dir, $this->context($lead, 'demo'),
+            'Construye un DEMO visual de UNA sola página (index.html, styles.css y script.js si ayuda) que se vea INCREÍBLE y enamore al cliente, siguiendo CLAUDE.md. '
+            .'No necesita backend ni ser 100% funcional, pero debe verse premium. Sigue el PROTOCOLO DE VERIFICACIÓN antes de terminar.');
     }
 
-    private function run(int $id, string $dir, string $prompt): bool
+    /** Business/scope context shared by every build mode. */
+    private function context(?Lead $lead, string $mode): array
+    {
+        $spec = $lead?->specs()->latest()->first();
+        $features = collect($spec?->content['features'] ?? [])
+            ->map(fn ($f) => is_array($f) ? trim(($f['name'] ?? '').(! empty($f['desc']) ? ' — '.$f['desc'] : '')) : $f)
+            ->filter()->implode("\n- ");
+
+        return [
+            'business' => $lead?->company ?: ($lead?->name ?: 'el negocio'),
+            'need' => $lead?->summary ?: 'sitio profesional a la medida',
+            'features' => $features !== '' ? $features : 'sitio profesional a la medida',
+            'mode' => $mode,
+        ];
+    }
+
+    private function run(int $id, string $dir, array $ctx, string $task): bool
     {
         File::ensureDirectoryExists($dir);
         @chmod($dir, 0777); // the non-root builder user must be able to write here
+        $this->writeContext($dir, $ctx);
+
         try {
             // Claude Code refuses --dangerously-skip-permissions as root, so run it as the
-            // non-root 'builder' user (created by the container entrypoint).
-            $inner = 'cd '.escapeshellarg($dir).' && HOME=/home/builder claude -p '.escapeshellarg($prompt)
+            // non-root 'builder' user. It auto-reads the CLAUDE.md we just wrote for full context.
+            $inner = 'cd '.escapeshellarg($dir).' && HOME=/home/builder claude -p '.escapeshellarg($task)
                 .' --dangerously-skip-permissions --output-format json';
             $r = Process::timeout((int) config('overcloud.deploy.build_timeout', 1500))
                 ->run(['su', 'builder', '-c', $inner]);
@@ -91,50 +100,55 @@ class AgentBuildService
             Log::warning('Claude build threw', ['id' => $id, 'e' => $e->getMessage()]);
 
             return false;
+        } finally {
+            @unlink($dir.'/CLAUDE.md'); // keep the deployed site clean
         }
     }
 
-    private function buildPrompt(Project $project, string $stack, array $content): string
+    /** Write the project's CLAUDE.md: full context + brand/image rules + verification protocol. */
+    private function writeContext(string $dir, array $ctx): void
     {
-        $lead = $project->lead;
-        $who = $lead?->company ?: ($lead?->name ?: 'el negocio');
-        $spec = $lead?->specs()->latest()->first();
-        $features = collect($spec?->content['features'] ?? [])
-            ->map(fn ($f) => is_array($f) ? trim(($f['name'] ?? '').' — '.($f['desc'] ?? '')) : $f)
-            ->filter()->implode("\n- ");
+        $isChange = $ctx['mode'] === 'change';
+        $verifyStep = $isChange
+            ? '4. EL CAMBIO: ya exploraste y editaste — ahora CONFIRMA con curl/grep que el valor NUEVO aparece en el HTML/CSS servido (no el viejo). Si no aparece, corrígelo y vuelve a verificar.'
+            : '4. Revisa que no haya enlaces rotos, secciones vacías, imágenes que no cargan ni errores en consola. El contenido debe ser realista y del giro.';
 
-        return "Construye un SITIO WEB COMPLETO, PULIDO y DESPLEGABLE para «{$who}». "
-            .'Necesidad del cliente: '.($lead?->summary ?? 'sitio profesional a la medida').".\n\n"
-            .'Representa de verdad lo que ofrece el negocio. Si es una tienda: catálogo de productos con fotos y precios, vista de producto, '
-            .'y un carrito funcional en JavaScript con totales en vivo y un flujo de checkout — con datos de ejemplo realistas del negocio. '
-            ."Inspírate en estas funcionalidades del alcance:\n- ".($features !== '' ? $features : 'sitio profesional a la medida')."\n\n"
-            .'REQUISITOS TÉCNICOS (cúmplelos para que despliegue sin fallar en UN solo intento): '
-            .'Usa SOLO HTML + CSS + JavaScript puro (sin frameworks de backend, sin composer ni npm) para que sea autónomo, rápido y confiable. '
-            .'Diseño moderno, responsivo y de buen gusto, en español. '
-            .$this->imageRules()
-            .'OBLIGATORIO: un footer en todas las páginas que diga "Desarrollado por Overcloud" donde "Overcloud" enlaza a https://wa.me/5215594356241, '
-            .'y "¿Quieres tu sitio? Escríbenos por WhatsApp" al mismo enlace. '
-            .'Incluye un Dockerfile sencillo que sirva los archivos estáticos en el puerto 8080 con bind 0.0.0.0, por ejemplo: '
-            .'FROM python:3-alpine / WORKDIR /app / COPY . /app / EXPOSE 8080 / CMD ["python","-m","http.server","8080"]. '
-            .'Escribe TODOS los archivos COMPLETOS en el directorio actual AHORA — no dejes nada a medias ni expliques. NO hagas git push ni despliegues.';
-    }
+        $md = <<<MD
+        # Overcloud — sitio para {$ctx['business']}
 
-    private function repairPrompt(string $stack, string $logs): string
-    {
-        return "El despliegue de este proyecto ({$stack}) falló. Logs del build/runtime:\n"
-            .mb_substr($logs, 0, 4000)."\n\n"
-            .'Diagnostica la causa y CORRIGE los archivos del proyecto en el directorio actual para que el build de Docker '
-            .'pase y la app sirva en su puerto. NO hagas push ni despliegues; solo corrige los archivos.';
-    }
+        Eres un **desarrollador senior de Overcloud** (agencia web). NO TERMINAS hasta verificar —sirviendo el sitio y revisándolo— que todo funciona y se ve profesional.
 
-    /** Image guidance: never random/mismatched stock; prefer on-theme gradients/emojis. */
-    private function imageRules(): string
-    {
-        return 'IMÁGENES: NO uses picsum.photos ni fotos aleatorias o genéricas, y JAMÁS paisajes, ciudades, '
-            .'monumentos o lugares ajenos al giro del negocio (nada de puentes, rascacielos u otros países). '
-            .'Prioriza gradientes CSS, colores de marca, patrones y emojis/íconos temáticos grandes para fondos, '
-            .'héroes y tarjetas (siempre cargan y siempre son del tema). Si de verdad necesitas una foto real, usa '
-            .'https://source.unsplash.com/<ancho>x<alto>/?<palabras> con palabras MUY específicas del giro '
-            .'(p. ej. una taquería: tacos,comida-mexicana; una cafetería: coffee,cafe). ';
+        ## Negocio
+        - **Nombre:** {$ctx['business']}
+        - **Necesidad:** {$ctx['need']}
+        - **Funciones del alcance:**
+        - {$ctx['features']}
+
+        ## Reglas de marca (OBLIGATORIO)
+        - Footer en TODAS las páginas: "Desarrollado por Overcloud" donde *Overcloud* enlaza a https://wa.me/5215594356241, y un "¿Quieres tu sitio? Escríbenos por WhatsApp" al mismo enlace.
+        - NUNCA menciones Claude, IA ni herramientas internas en el contenido del sitio. Todo es de Overcloud.
+        - Español, tono profesional y cálido.
+
+        ## Imágenes (CRÍTICO)
+        - NO uses picsum.photos ni fotos aleatorias o genéricas, y JAMÁS paisajes, ciudades, monumentos o lugares ajenos al giro (nada de puentes, rascacielos u otros países).
+        - Prioriza gradientes CSS, colores de marca, patrones y emojis/íconos temáticos grandes (siempre cargan y siempre son del tema).
+        - Si de verdad necesitas una foto real: https://source.unsplash.com/<ancho>x<alto>/?<palabras-MUY-específicas-del-giro> (p. ej. taquería: tacos,comida-mexicana).
+
+        ## Técnico
+        - SOLO HTML + CSS + JavaScript puro (sin backend, sin npm/composer). Autónomo, rápido, confiable.
+        - Debe existir un Dockerfile que sirva los estáticos en el puerto 8080: `FROM python:3-alpine` / `WORKDIR /app` / `COPY . /app` / `EXPOSE 8080` / `CMD ["python","-m","http.server","8080"]`.
+        - Diseño moderno, responsivo, pulido y atractivo.
+
+        ## PROTOCOLO DE VERIFICACIÓN — NO termines sin completarlo
+        1. Escribe/edita TODOS los archivos completos (sin TODOs ni medias tintas).
+        2. Sirve el sitio para probarlo: `php -S 127.0.0.1:8099 >/tmp/srv.log 2>&1 &` dentro del directorio (o `python3 -m http.server 8099`). Usa otro puerto si está ocupado.
+        3. Con curl confirma que CADA página responde y trae lo esperado: el nombre del negocio, las secciones clave y el footer de Overcloud. Ej: `curl -s 127.0.0.1:8099/ | grep -i "{$ctx['business']}"` y `curl -s 127.0.0.1:8099/ | grep -i overcloud`.
+        {$verifyStep}
+        5. Si algo falla, CORRÍGELO y vuelve a verificar. Repite hasta que TODO esté correcto.
+        6. Al terminar, haz `kill` del servidor local. NO hagas git push ni despliegues.
+        MD;
+
+        File::put($dir.'/CLAUDE.md', $md);
+        @chmod($dir.'/CLAUDE.md', 0666);
     }
 }
