@@ -80,16 +80,19 @@ class AgentBuildService
             ->map(fn ($f) => is_array($f) ? trim(($f['name'] ?? '').' — '.($f['desc'] ?? '')) : $f)
             ->filter()->implode("\n- ");
 
-        return "Construye una APLICACIÓN WEB REAL Y FUNCIONAL (stack: {$stack}) para «{$who}» — NO una landing page. "
-            .'Necesidad del cliente: '.($lead?->summary ?? 'plataforma profesional a la medida').".\n\n"
-            .'IMPLEMENTA DE VERDAD estas funcionalidades del alcance aprobado (con su base de datos, panel de administración y lógica real):'
-            .($features !== '' ? "\n- ".$features : "\n- ".json_encode($content['features'] ?? [], JSON_UNESCAPED_UNICODE))."\n\n"
-            .'Si es una tienda: catálogo administrable, carrito, pagos con Stripe (claves por env), panel de administración y gestión de pedidos, todo funcional. '
-            .'Moderno, responsivo, en español. OBLIGATORIO: footer "Desarrollado por Overcloud" enlazando https://wa.me/5215594356241, '
+        return "Construye un SITIO WEB COMPLETO, PULIDO y DESPLEGABLE para «{$who}». "
+            .'Necesidad del cliente: '.($lead?->summary ?? 'sitio profesional a la medida').".\n\n"
+            .'Representa de verdad lo que ofrece el negocio. Si es una tienda: catálogo de productos con fotos y precios, vista de producto, '
+            .'y un carrito funcional en JavaScript con totales en vivo y un flujo de checkout — con datos de ejemplo realistas del negocio. '
+            ."Inspírate en estas funcionalidades del alcance:\n- ".($features !== '' ? $features : 'sitio profesional a la medida')."\n\n"
+            .'REQUISITOS TÉCNICOS (cúmplelos para que despliegue sin fallar en UN solo intento): '
+            .'Usa SOLO HTML + CSS + JavaScript puro (sin frameworks de backend, sin composer ni npm) para que sea autónomo, rápido y confiable. '
+            .'Diseño moderno, responsivo y de buen gusto, en español. Imágenes desde https://picsum.photos/seed/<palabra>/<ancho>/<alto>. '
+            .'OBLIGATORIO: un footer en todas las páginas que diga "Desarrollado por Overcloud" donde "Overcloud" enlaza a https://wa.me/5215594356241, '
             .'y "¿Quieres tu sitio? Escríbenos por WhatsApp" al mismo enlace. '
-            .'Incluye un Dockerfile que construya y sirva la app (bind 0.0.0.0, puerto correcto), con assets horneados para un build rápido, '
-            .'un .dockerignore correcto, y migraciones+seed que se ejecuten al arrancar. Escribe TODOS los archivos en el directorio actual. '
-            .'NO hagas git push ni despliegues: solo deja el proyecto listo para construir con Docker.';
+            .'Incluye un Dockerfile sencillo que sirva los archivos estáticos en el puerto 8080 con bind 0.0.0.0, por ejemplo: '
+            .'FROM python:3-alpine / WORKDIR /app / COPY . /app / EXPOSE 8080 / CMD ["python","-m","http.server","8080"]. '
+            .'Escribe TODOS los archivos COMPLETOS en el directorio actual AHORA — no dejes nada a medias ni expliques. NO hagas git push ni despliegues.';
     }
 
     private function repairPrompt(string $stack, string $logs): string
