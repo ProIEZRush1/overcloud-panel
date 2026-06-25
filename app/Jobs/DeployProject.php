@@ -23,9 +23,13 @@ class DeployProject implements ShouldQueue
     use Queueable;
     use SerializesModels;
 
-    public int $tries = 1;
-
     public int $timeout = 1800;
+
+    /** Survive a worker restart (deploys): retry a killed build instead of stranding the client. */
+    public function retryUntil(): \DateTimeInterface
+    {
+        return now()->addMinutes(45);
+    }
 
     public function __construct(public int $projectId) {}
 
