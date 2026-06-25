@@ -236,6 +236,8 @@ class BotResponder
     {
         $lead->update(['stage' => LeadStage::Negotiating]);
         if (config('overcloud.deploy.enabled')) {
+            // Reserve the domain right away so DNS propagates while the demo builds.
+            app(DeployService::class)->reserveDomain(Str::slug($lead->company ?: $lead->name ?: 'sitio').'-demo');
             BuildDemo::dispatch($lead->id)->onQueue('deploy');
         }
 

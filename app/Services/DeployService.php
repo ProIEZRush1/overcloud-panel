@@ -385,12 +385,32 @@ class DeployService
         }
     }
 
+    /** Reserve the domain (Cloudflare A record, proxied) early so DNS propagates during the build. */
+    public function reserveDomain(string $subdomain): ?string
+    {
+        $c = config('overcloud.deploy');
+        if (empty($c['cloudflare_token']) || empty($c['cloudflare_zone'])) {
+            return null;
+        }
+
+        return $this->createDns($c, $subdomain) ? $subdomain.'.'.$c['base_domain'] : null;
+    }
+
     private function createDns(array $c, string $sub): bool
     {
+        $fqdn = $sub.'.'.$c['base_domain'];
         try {
+            // Idempotent: if the record already exists (e.g. reserved earlier), treat as success.
+            $existing = Http::withToken($c['cloudflare_token'])->timeout(15)
+                ->get("https://api.cloudflare.com/client/v4/zones/{$c['cloudflare_zone']}/dns_records", ['name' => $fqdn])
+                ->json('result');
+            if (! empty($existing)) {
+                return true;
+            }
+
             return (bool) Http::withToken($c['cloudflare_token'])->timeout(20)
                 ->post("https://api.cloudflare.com/client/v4/zones/{$c['cloudflare_zone']}/dns_records", [
-                    'type' => 'A', 'name' => $sub, 'content' => $c['server_ip'], 'ttl' => 120, 'proxied' => false,
+                    'type' => 'A', 'name' => $sub, 'content' => $c['server_ip'], 'ttl' => 1, 'proxied' => true,
                 ])->json('success');
         } catch (\Throwable $e) {
             return false;
