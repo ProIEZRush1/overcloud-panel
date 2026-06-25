@@ -161,6 +161,17 @@ class BotResponder
         $brief = (array) ($project->brief ?? []);
         if (filled($inbound->body)) {
             $brief['requirements'][] = $inbound->body;
+
+            // Capture any API keys/credentials the client shares — injected at deploy time.
+            if ($this->looksLikeSecret($inbound->body)) {
+                $env = $this->extractSecrets($inbound->body);
+                if ($env) {
+                    $brief['env'] = array_merge((array) ($brief['env'] ?? []), $env);
+                    $project->update(['brief' => $brief]);
+
+                    return $this->send($conversation, '¡Recibí tus accesos y los guardé de forma segura! 🔐 ¿Hay algo más o *arrancamos*?');
+                }
+            }
         }
 
         $all = $this->wantsAll($text);
@@ -331,6 +342,35 @@ class BotResponder
     private function looksLikeChange(string $text): bool
     {
         return Str::contains($text, ['cambi', 'cámbi', 'agrega', 'añade', 'anade', 'quita', 'pon ', 'ponle', 'modific', 'color', 'logo', 'texto', 'precio', 'producto', 'foto', 'imagen', 'ajusta', 'mueve', 'actualiza', 'reemplaza', 'más grande', 'mas grande', 'más chico']);
+    }
+
+    /** The message likely contains API keys/credentials the client is sharing. */
+    private function looksLikeSecret(string $text): bool
+    {
+        return (bool) preg_match('/(sk_[a-z]+_|pk_[a-z]+_|sk-[A-Za-z0-9]{8}|AIza[0-9A-Za-z\-_]{8}|whsec_|rk_live|[A-Za-z0-9_\-]{28,})/', $text)
+            || Str::contains(Str::lower($text), ['stripe', 'api key', 'apikey', 'api_key', 'mi llave', 'mi clave', 'token de', 'secret key']);
+    }
+
+    /** Extract credentials from the message as ENV pairs via the assistant. */
+    private function extractSecrets(string $text): array
+    {
+        if (! $this->assistant->isEnabled()) {
+            return [];
+        }
+        try {
+            $raw = $this->assistant->complete(
+                'Extrae credenciales o llaves de API del siguiente texto de WhatsApp. Responde SOLO con JSON {"NOMBRE_ENV":"valor"} '
+                .'usando nombres estándar en mayúsculas (STRIPE_SECRET, STRIPE_KEY, OPENAI_API_KEY, etc.). Si no hay ninguna, responde {}.'
+                ."\n\n".$text
+            );
+            if (preg_match('/\{.*\}/s', (string) $raw, $m) && is_array($d = json_decode($m[0], true))) {
+                return array_filter($d, fn ($v) => is_string($v) && trim($v) !== '');
+            }
+        } catch (\Throwable $e) {
+            // best-effort
+        }
+
+        return [];
     }
 
     private function detectService($lead, string $text): void

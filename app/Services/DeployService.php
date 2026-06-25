@@ -85,6 +85,9 @@ class DeployService
             'brief' => $brief,
         ]);
 
+        // Inject any credentials the client shared (Stripe, API keys, …) into the app env.
+        $this->applyEnv($c, $uuid, (array) ($brief['env'] ?? []));
+
         $this->notify($project, "¡Ya casi! 🚀 Estoy publicando {$label} en línea y revisando que todo funcione bien...");
 
         // Self-heal: deploy -> wait for the build -> E2E verify the LIVE URL (the source
@@ -306,6 +309,24 @@ class DeployService
         $d = $r->json('domains');
 
         return [$r->json('uuid'), is_array($d) ? ($d[0] ?? null) : $d];
+    }
+
+    /** Inject client-provided credentials into the Coolify app's environment. */
+    private function applyEnv(array $c, string $uuid, array $env): void
+    {
+        if (! $env) {
+            return;
+        }
+        $data = ['data' => []];
+        foreach ($env as $k => $v) {
+            $data['data'][] = ['key' => (string) $k, 'value' => (string) $v, 'is_preview' => false];
+        }
+        try {
+            Http::withToken($c['coolify_token'])->timeout(30)
+                ->patch($c['coolify_url']."/applications/{$uuid}/envs/bulk", $data);
+        } catch (\Throwable $e) {
+            Log::warning('applyEnv failed', ['e' => $e->getMessage()]);
+        }
     }
 
     private function triggerDeploy(array $c, string $uuid): ?string
