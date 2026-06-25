@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Lead;
 use App\Models\Project;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
@@ -27,13 +28,13 @@ class AgentBuildService
     /** Build the project from scratch into $dir. Returns true on success. */
     public function build(Project $project, string $stack, array $content, string $dir): bool
     {
-        return $this->run($project, $dir, $this->buildPrompt($project, $stack, $content));
+        return $this->run($project->id, $dir, $this->buildPrompt($project, $stack, $content));
     }
 
     /** Repair a project that failed to build/serve, using the deploy logs. */
     public function repair(Project $project, string $stack, string $dir, string $logs): bool
     {
-        return $this->run($project, $dir, $this->repairPrompt($stack, $logs));
+        return $this->run($project->id, $dir, $this->repairPrompt($stack, $logs));
     }
 
     /** Apply a client-requested change to an existing project checkout. */
@@ -43,10 +44,28 @@ class AgentBuildService
             .'Conserva el resto del sitio funcionando, mantén el footer "Desarrollado por Overcloud", el Dockerfile y la configuración de despliegue. '
             .'Si el cambio afecta los assets (CSS/JS), reconstrúyelos para que queden horneados. NO hagas git push ni despliegues; solo edita los archivos.';
 
-        return $this->run($project, $dir, $prompt);
+        return $this->run($project->id, $dir, $prompt);
     }
 
-    private function run(Project $project, string $dir, string $prompt): bool
+    /** Build a simple one-page visual demo for a lead (shown before the quote). */
+    public function buildDemo(Lead $lead, string $dir): bool
+    {
+        $who = $lead->company ?: ($lead->name ?: 'el negocio');
+        $spec = $lead->specs()->latest()->first();
+        $features = collect($spec?->content['features'] ?? [])
+            ->map(fn ($f) => is_array($f) ? ($f['name'] ?? '') : $f)->filter()->implode(', ');
+        $prompt = "Construye un DEMO visual de UNA sola página (index.html, styles.css y script.js si ayuda) para «{$who}». "
+            .'Es un demo para que el cliente VEA cómo se vería su proyecto y se enamore — no necesita backend ni ser 100% funcional, pero debe verse increíble. '
+            .'Necesidad del cliente: '.($lead->summary ?? 'sitio profesional').'. Muestra visualmente: '.($features !== '' ? $features : 'las secciones principales').'. '
+            .'Diseño moderno, atractivo y responsivo, en español. Imágenes desde https://picsum.photos/seed/<palabra>/<ancho>/<alto>. '
+            .'OBLIGATORIO: footer "Desarrollado por Overcloud" enlazando https://wa.me/5215594356241. '
+            .'Incluye un Dockerfile que sirva los archivos estáticos en el puerto 8080: FROM python:3-alpine / WORKDIR /app / COPY . /app / EXPOSE 8080 / CMD ["python","-m","http.server","8080"]. '
+            .'Escribe TODOS los archivos COMPLETOS en el directorio actual AHORA, no expliques. NO hagas git push ni despliegues.';
+
+        return $this->run($lead->id, $dir, $prompt);
+    }
+
+    private function run(int $id, string $dir, string $prompt): bool
     {
         File::ensureDirectoryExists($dir);
         @chmod($dir, 0777); // the non-root builder user must be able to write here
@@ -58,14 +77,14 @@ class AgentBuildService
             $r = Process::timeout((int) config('overcloud.deploy.build_timeout', 1500))
                 ->run(['su', 'builder', '-c', $inner]);
             if (! $r->successful()) {
-                Log::warning('Claude build failed', ['project' => $project->id, 'err' => mb_substr($r->errorOutput() ?: $r->output(), 0, 400)]);
+                Log::warning('Claude build failed', ['id' => $id, 'err' => mb_substr($r->errorOutput() ?: $r->output(), 0, 400)]);
 
                 return false;
             }
 
             return true;
         } catch (\Throwable $e) {
-            Log::warning('Claude build threw', ['project' => $project->id, 'e' => $e->getMessage()]);
+            Log::warning('Claude build threw', ['id' => $id, 'e' => $e->getMessage()]);
 
             return false;
         }

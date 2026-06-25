@@ -9,6 +9,7 @@ use App\Enums\MessageStatus;
 use App\Enums\MessageType;
 use App\Enums\QuoteStatus;
 use App\Jobs\ApplyChange;
+use App\Jobs\BuildDemo;
 use App\Jobs\DeployProject;
 use App\Models\Conversation;
 use App\Models\Lead;
@@ -66,7 +67,8 @@ class BotResponder
             LeadStage::New => $this->onNew($conversation, $lead),
             LeadStage::Qualifying => $this->onQualifying($conversation, $lead, $inbound, $text),
             LeadStage::Spec => $this->onScope($conversation, $lead, $text),
-            LeadStage::Quoted, LeadStage::Negotiating => $this->onQuoted($conversation, $lead, $text),
+            LeadStage::Negotiating => $this->onDemo($conversation, $lead, $text),
+            LeadStage::Quoted => $this->onQuoted($conversation, $lead, $text),
             LeadStage::Accepted, LeadStage::AwaitingPayment => $this->onAwaitingPayment($conversation, $lead, $isMedia),
             LeadStage::Paid => $this->onGathering($conversation, $lead, $inbound, $text),
             LeadStage::InProduction, LeadStage::Delivered, LeadStage::Maintenance => $this->onProduction($conversation, $lead, $text),
@@ -222,11 +224,35 @@ class BotResponder
     private function onScope(Conversation $conversation, Lead $lead, string $text): ?Message
     {
         if ($this->isYes($text)) {
+            return $this->startDemo($conversation, $lead);
+        }
+
+        return $this->send($conversation, $this->claudeOr($conversation,
+            'Con gusto ajusto lo que necesites del alcance 🙌 ¿Qué te gustaría cambiar o agregar? En cuanto me confirmes que está a tu gusto, te preparo un *demo* visual.'));
+    }
+
+    /** Before quoting: build + deploy a quick visual demo for the client to fall in love with. */
+    private function startDemo(Conversation $conversation, Lead $lead): ?Message
+    {
+        $lead->update(['stage' => LeadStage::Negotiating]);
+        if (config('overcloud.deploy.enabled')) {
+            BuildDemo::dispatch($lead->id)->onQueue('deploy');
+        }
+
+        return $this->send($conversation,
+            '¡Perfecto! 🙌 Antes de pasarte la cotización te voy a armar un *demo visual* de cómo se vería tu proyecto, para que lo veas en vivo. '
+            .'Dame un par de minutos y te comparto el enlace por aquí. 🎨');
+    }
+
+    /** Demo stage: when the client loves the demo, send the quote. */
+    private function onDemo(Conversation $conversation, Lead $lead, string $text): ?Message
+    {
+        if ($this->isYes($text)) {
             return $this->sendQuote($conversation, $lead);
         }
 
         return $this->send($conversation, $this->claudeOr($conversation,
-            'Con gusto ajusto lo que necesites del alcance 🙌 ¿Qué te gustaría cambiar o agregar? En cuanto me confirmes que está a tu gusto, te preparo la *cotización*.'));
+            'Si quieres que ajuste algo del demo, dime y lo cambio 🙌 Y cuando te late, te paso la *cotización* para arrancar. ✅'));
     }
 
     /** Generate + send ONLY the detailed scope doc; the quote comes after the client OKs it. */

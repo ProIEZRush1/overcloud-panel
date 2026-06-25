@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Contracts\Assistant;
 use App\Enums\ProjectStatus;
+use App\Models\Lead;
 use App\Models\Project;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -115,6 +116,39 @@ class DeployService
         }
 
         return $this->fail($project, 'no pasó las pruebas tras varios intentos');
+    }
+
+    /** Build + deploy a quick one-page visual demo for a lead (before the quote). Returns the live URL. */
+    public function deployDemo(Lead $lead): ?string
+    {
+        if (! $this->isConfigured() || ! $this->agent->isAvailable()) {
+            return null;
+        }
+        $c = config('overcloud.deploy');
+        $name = Str::slug(($lead->company ?: $lead->name ?: 'sitio')).'-demo-'.Str::lower(Str::random(4));
+        $dir = storage_path('builds/'.$name);
+
+        if (! $this->agent->buildDemo($lead, $dir)
+            || ! $this->createRepo($c, $name)
+            || ! $this->pushDir($c, $dir, $name)) {
+            return null;
+        }
+
+        [$uuid, $url] = $this->createApp($c, $name, '8080');
+        if (! $uuid) {
+            return null;
+        }
+
+        $stack = ['kind' => 'web', 'markers' => []];
+        $content = ['business' => (string) ($lead->company ?? '')];
+        for ($i = 1; $i <= 2; $i++) {
+            $dep = $this->triggerDeploy($c, $uuid);
+            if ($this->waitForLive($c, $dep, $url, $content, $stack)['ok']) {
+                return $url;
+            }
+        }
+
+        return $url;
     }
 
     /** Apps -> Flutter Web; sites -> default (Laravel+Vue). Explicit brief.stack wins. */
