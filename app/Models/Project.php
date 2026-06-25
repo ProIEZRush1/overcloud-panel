@@ -20,7 +20,7 @@ class Project extends Model
         'lead_id', 'quote_id', 'maintenance_plan_id', 'whatsapp_account_id', 'uuid',
         'name', 'slug', 'type', 'status', 'brief', 'repo_url', 'repo_branch',
         'coolify_app_uuid', 'prod_url', 'test_url', 'domain', 'whatsapp_group_jid',
-        'maintenance_active', 'started_at', 'delivered_at',
+        'maintenance_active', 'started_at', 'delivered_at', 'paused_at', 'ready_at',
     ];
 
     protected $casts = [
@@ -29,6 +29,8 @@ class Project extends Model
         'maintenance_active' => 'boolean',
         'started_at' => 'datetime',
         'delivered_at' => 'datetime',
+        'paused_at' => 'datetime',
+        'ready_at' => 'datetime',
     ];
 
     public function lead(): BelongsTo

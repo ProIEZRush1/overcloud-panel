@@ -15,7 +15,7 @@ class PaymentRequest extends Model
         'lead_id', 'quote_id', 'project_id', 'subscription_id', 'bank_account_id',
         'verified_by_user_id', 'type', 'amount_cents', 'currency', 'status',
         'bank_details_snapshot', 'reference', 'due_date',
-        'sent_at', 'verified_at', 'rejected_at', 'review_notes',
+        'sent_at', 'reminded_at', 'verified_at', 'rejected_at', 'review_notes',
     ];
 
     protected $casts = [
@@ -25,6 +25,7 @@ class PaymentRequest extends Model
         'bank_details_snapshot' => 'array',
         'due_date' => 'date',
         'sent_at' => 'datetime',
+        'reminded_at' => 'datetime',
         'verified_at' => 'datetime',
         'rejected_at' => 'datetime',
     ];

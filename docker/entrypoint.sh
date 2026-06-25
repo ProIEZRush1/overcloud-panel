@@ -36,4 +36,7 @@ mkdir -p storage/builds && chmod 777 storage/builds
 php artisan queue:work --queue=default --tries=1 --sleep=2 --timeout=180 >> storage/logs/worker.log 2>&1 &
 php artisan queue:work --queue=deploy --tries=1 --sleep=3 --timeout=1800 >> storage/logs/deploy.log 2>&1 &
 
+# Scheduler (daily billing/dunning run).
+php artisan schedule:work >> storage/logs/schedule.log 2>&1 &
+
 exec php artisan serve --host 0.0.0.0 --port 8080

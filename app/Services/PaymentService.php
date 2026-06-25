@@ -2,19 +2,20 @@
 
 namespace App\Services;
 
+use App\Enums\LeadStage;
 use App\Enums\PaymentStatus;
 use App\Enums\PaymentType;
 use App\Models\BankAccount;
 use App\Models\PaymentRequest;
+use App\Models\Project;
 use App\Models\Quote;
 
 class PaymentService
 {
-    /** Create the deposit payment request for an accepted quote. */
+    /** Create the deposit (40%) payment request for an accepted quote. */
     public function createDeposit(Quote $quote): PaymentRequest
     {
-        $bank = BankAccount::where('is_default', true)->where('is_active', true)->first()
-            ?? BankAccount::where('is_active', true)->first();
+        $bank = $this->defaultBank();
 
         return PaymentRequest::create([
             'lead_id' => $quote->lead_id,
@@ -27,6 +28,53 @@ class PaymentService
             'bank_details_snapshot' => $bank?->toSnapshot(),
             'reference' => $quote->number,
             'due_date' => now()->addDays(3),
+            'sent_at' => now(),
+        ]);
+    }
+
+    /** A milestone balance (e.g. 30% al desplegar, 30% final), due in $dueDays. */
+    public function createBalance(Quote $quote, ?Project $project, string $reference, int $amountCents, int $dueDays = 7): PaymentRequest
+    {
+        $bank = $this->defaultBank();
+
+        return PaymentRequest::create([
+            'lead_id' => $quote->lead_id,
+            'quote_id' => $quote->id,
+            'project_id' => $project?->id,
+            'bank_account_id' => $bank?->id,
+            'type' => PaymentType::Balance,
+            'amount_cents' => $amountCents,
+            'currency' => $quote->currency,
+            'status' => PaymentStatus::Pending,
+            'bank_details_snapshot' => $bank?->toSnapshot(),
+            'reference' => $reference,
+            'due_date' => now()->addDays($dueDays),
+            'sent_at' => now(),
+        ]);
+    }
+
+    /** The monthly maintenance charge, due in $dueDays. */
+    public function createMaintenance(Project $project, int $dueDays = 7): ?PaymentRequest
+    {
+        $monthly = (int) ($project->quote?->maintenance_monthly_cents ?? 0);
+        if ($monthly <= 0) {
+            return null;
+        }
+        $bank = $this->defaultBank();
+
+        return PaymentRequest::create([
+            'lead_id' => $project->lead_id,
+            'quote_id' => $project->quote_id,
+            'project_id' => $project->id,
+            'bank_account_id' => $bank?->id,
+            'type' => PaymentType::Maintenance,
+            'amount_cents' => $monthly,
+            'currency' => $project->quote?->currency ?? 'MXN',
+            'status' => PaymentStatus::Pending,
+            'bank_details_snapshot' => $bank?->toSnapshot(),
+            'reference' => 'Mantenimiento '.now()->locale('es')->isoFormat('MMMM YYYY'),
+            'due_date' => now()->addDays($dueDays),
+            'sent_at' => now(),
         ]);
     }
 
@@ -42,7 +90,11 @@ class PaymentService
             'reviewed_at' => now(),
             'reviewed_by_user_id' => $userId,
         ]);
-        $request->lead?->update(['stage' => \App\Enums\LeadStage::Paid]);
+
+        // Only the deposit advances the lead into the post-payment (build) flow.
+        if ($request->type === PaymentType::Deposit) {
+            $request->lead?->update(['stage' => LeadStage::Paid]);
+        }
     }
 
     public function reject(PaymentRequest $request, ?string $notes = null, ?int $userId = null): void
@@ -59,5 +111,11 @@ class PaymentService
             'review_notes' => $notes,
             'reviewed_by_user_id' => $userId,
         ]);
+    }
+
+    private function defaultBank(): ?BankAccount
+    {
+        return BankAccount::where('is_default', true)->where('is_active', true)->first()
+            ?? BankAccount::where('is_active', true)->first();
     }
 }

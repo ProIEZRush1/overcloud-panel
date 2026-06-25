@@ -55,10 +55,8 @@ class DeployProject implements ShouldQueue
         // Delivered: subsequent client messages route to change-handling.
         $project->lead?->update(['stage' => LeadStage::Delivered]);
 
-        if ($conv && $account) {
-            $gateway->sendText($account->session_name, $conv->contact_jid,
-                "¡Buenas noticias! 🚀 Tu sitio ya está en línea:\n{$url}\n\nRevísalo y, si quieres cualquier cambio, descríbemelo por aquí y lo aplico. 🙌");
-        }
+        // Hand over the site + admin access and charge the 30% milestone (7-day window + changes).
+        app(\App\Services\BillingService::class)->onDeployed($project);
         if ($project->whatsapp_group_jid && $account) {
             try {
                 $gateway->sendText($account->session_name, $project->whatsapp_group_jid, "🚀 ¡Sitio publicado! {$url}");

@@ -48,14 +48,12 @@ class PaymentController extends Controller
             report($e);
         }
 
-        // First payment verified → spin up the project + its WhatsApp group, then
-        // tell the client in their chat that we're starting.
         try {
-            if ($payment->quote) {
+            if ($payment->type === \App\Enums\PaymentType::Deposit && $payment->quote) {
+                // Deposit verified → spin up the project; the bot asks the client for what it
+                // needs (content, accesses, or "do it all for me") before building.
                 $project = app(ProjectService::class)->provisionFromQuote($payment->quote);
 
-                // Don't build yet: the bot first asks the client for everything it needs
-                // (content, photos, accesses, or "do it all for me"), then triggers the build.
                 if (config('overcloud.deploy.enabled')) {
                     app(BotResponder::class)->startGathering($project);
                 } else {
@@ -65,6 +63,9 @@ class PaymentController extends Controller
                             '¡Tu pago quedó verificado! ✅ Ya arrancamos con tu proyecto; cualquier cambio o duda, por aquí. 🚀');
                     }
                 }
+            } elseif (in_array($payment->type, [\App\Enums\PaymentType::Balance, \App\Enums\PaymentType::Maintenance], true)) {
+                // Milestone / maintenance verified → resume the site + bill the next step.
+                app(\App\Services\BillingService::class)->onPaymentVerified($payment);
             }
         } catch (\Throwable $e) {
             report($e);
