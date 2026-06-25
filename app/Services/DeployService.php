@@ -7,6 +7,7 @@ use App\Enums\ProjectStatus;
 use App\Models\Project;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Str;
 
 /**
@@ -21,7 +22,7 @@ class DeployService
 {
     private const OWNER_WA = '5215594356241';
 
-    public function __construct(private Assistant $assistant) {}
+    public function __construct(private Assistant $assistant, private AgentBuildService $agent) {}
 
     public function isConfigured(): bool
     {
@@ -45,10 +46,23 @@ class DeployService
         $name = Str::slug(($project->lead?->company ?: $project->lead?->name ?: 'sitio')).'-'.Str::lower(Str::random(5));
         $content = $this->generateContent($project);
 
-        if (! $this->generateRepo($c, $stack['repo'], $name)) {
-            return $this->fail($project, 'no se pudo crear el repositorio');
+        // Hybrid: fast template path by default; escalate to an on-the-moment Claude
+        // Code build when the project is flagged custom or the stack has no starter.
+        $custom = $this->usesCustomBuild($project, $stack);
+        $dir = $custom ? storage_path('builds/'.$name) : null;
+        if ($custom) {
+            if (! $this->agent->isAvailable()
+                || ! $this->agent->build($project, $stackKey, $content, $dir)
+                || ! $this->createRepo($c, $name)
+                || ! $this->pushDir($c, $dir, $name)) {
+                return $this->fail($project, 'no se pudo construir el proyecto a la medida');
+            }
+        } else {
+            if (! $this->generateRepo($c, $stack['repo'], $name)) {
+                return $this->fail($project, 'no se pudo crear el repositorio');
+            }
+            $this->updateContent($c, $name, $content);
         }
-        $this->updateContent($c, $name, $content);
 
         [$uuid, $url] = $this->createApp($c, $name, $stack['port']);
         if (! $uuid) {
@@ -65,26 +79,25 @@ class DeployService
             'brief' => $brief,
         ]);
 
-        // Self-heal: deploy -> wait for the build -> E2E verify the live URL; retry.
+        // Self-heal: deploy -> wait for the build -> E2E verify the LIVE URL (the source
+        // of truth, with retries for routing delay); retry the whole cycle on failure.
         for ($attempt = 1; $attempt <= (int) $c['max_attempts']; $attempt++) {
             $depUuid = $this->triggerDeploy($c, $uuid);
-            $built = $this->waitBuild($c, $depUuid);
+            $this->waitBuild($c, $depUuid);
 
-            if ($built) {
-                $verdict = $this->verify($url, $content, $stack);
-                if ($verdict['ok']) {
-                    $project->update(['status' => ProjectStatus::Live, 'delivered_at' => now()]);
-                    Log::info('Deploy live', ['project' => $project->id, 'url' => $url, 'attempt' => $attempt]);
+            $verdict = $this->verifyLive($url, $content, $stack);
+            if ($verdict['ok']) {
+                $project->update(['status' => ProjectStatus::Live, 'delivered_at' => now()]);
+                Log::info('Deploy live', ['project' => $project->id, 'url' => $url, 'attempt' => $attempt]);
 
-                    return $url;
-                }
-                $reason = 'E2E: '.$verdict['reason'];
-            } else {
-                $reason = 'build falló';
+                return $url;
             }
 
-            Log::warning('Deploy attempt failed', ['project' => $project->id, 'attempt' => $attempt, 'reason' => $reason]);
-            $this->autoFix($c, $name, $stack, $this->fetchLogs($c, $depUuid), $reason);
+            Log::warning('Deploy attempt failed', ['project' => $project->id, 'attempt' => $attempt, 'reason' => $verdict['reason']]);
+            // On a custom build, let Claude Code repair the repo from the logs before retrying.
+            if ($custom && $dir && $this->agent->repair($project, $stackKey, $dir, $this->fetchLogs($c, $depUuid))) {
+                $this->pushDir($c, $dir, $name);
+            }
             sleep(4);
         }
 
@@ -126,6 +139,21 @@ class DeployService
         }
 
         return ['ok' => true, 'reason' => 'ok'];
+    }
+
+    /** Verify with retries to absorb container/routing warm-up after a build. */
+    private function verifyLive(string $url, array $content, array $stack, int $tries = 10): array
+    {
+        $last = ['ok' => false, 'reason' => 'sin respuesta'];
+        for ($i = 0; $i < $tries; $i++) {
+            $last = $this->verify($url, $content, $stack);
+            if ($last['ok']) {
+                return $last;
+            }
+            sleep(8);
+        }
+
+        return $last;
     }
 
     private function generateContent(Project $project): array
@@ -263,7 +291,7 @@ class DeployService
         if (! $depUuid) {
             return false;
         }
-        for ($i = 0; $i < 45; $i++) {
+        for ($i = 0; $i < 30; $i++) {
             $status = Http::withToken($c['coolify_token'])->timeout(20)
                 ->get($c['coolify_url']."/deployments/{$depUuid}")->json('status');
             if ($status === 'finished') {
@@ -289,14 +317,39 @@ class DeployService
         return is_string($logs) ? $logs : (string) json_encode($logs);
     }
 
-    /**
-     * Best-effort recovery between attempts. Templates are pre-hardened, so most
-     * failures are transient (a plain retry fixes them). Known log patterns can be
-     * patched on the per-client repo here as they're discovered.
-     */
-    private function autoFix(array $c, string $repo, array $stack, string $logs, string $reason): void
+    /** Escalate to an on-the-moment Claude Code build when flagged custom or no starter exists. */
+    private function usesCustomBuild(Project $project, array $stack): bool
     {
-        // Reserved for known per-repo fixes keyed off $logs; retry covers transient failures.
+        $brief = (array) ($project->brief ?? []);
+
+        return ($brief['custom'] ?? false) === true || empty($stack['repo']);
+    }
+
+    private function createRepo(array $c, string $name): bool
+    {
+        $r = Http::withToken($c['github_token'])->post('https://api.github.com/user/repos', [
+            'name' => $name, 'private' => false, 'auto_init' => false,
+        ]);
+
+        return $r->successful() || $r->status() === 422;
+    }
+
+    /** Push a locally-built project dir to a fresh GitHub repo using the token. */
+    private function pushDir(array $c, string $dir, string $name): bool
+    {
+        $remote = "https://x-access-token:{$c['github_token']}@github.com/{$c['github_owner']}/{$name}.git";
+        $script = 'cd '.escapeshellarg($dir).' && git init -q && git add -A && '
+            .'git -c user.email=bot@overcloud.us -c user.name=Overcloud commit -q -m build && '
+            .'git branch -M main && (git remote add origin '.escapeshellarg($remote)
+            .' 2>/dev/null || git remote set-url origin '.escapeshellarg($remote).') && '
+            .'git push -q -u origin main --force';
+        try {
+            return Process::timeout(180)->run(['bash', '-lc', $script])->successful();
+        } catch (\Throwable $e) {
+            Log::warning('pushDir failed', ['e' => $e->getMessage()]);
+
+            return false;
+        }
     }
 
     private function fail(Project $project, string $why): ?string
