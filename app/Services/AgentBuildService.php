@@ -52,12 +52,14 @@ class AgentBuildService
             .'y CONFIRMA sirviendo el sitio que el cambio realmente quedó reflejado. No termines hasta verificarlo.');
     }
 
-    /** Build a simple one-page visual demo for a lead (shown before the quote). */
+    /** Build a complete, representative visual demo for a lead (shown before the quote). */
     public function buildDemo(Lead $lead, string $dir): bool
     {
         return $this->run($lead->id, $dir, $this->context($lead, 'demo'),
-            'Construye un DEMO visual de UNA sola página (index.html, styles.css y script.js si ayuda) que se vea INCREÍBLE y enamore al cliente, siguiendo CLAUDE.md. '
-            .'No necesita backend ni ser 100% funcional, pero debe verse premium. Sigue el PROTOCOLO DE VERIFICACIÓN antes de terminar.');
+            'Construye un DEMO COMPLETO y representativo del proyecto siguiendo CLAUDE.md — NO un boceto básico de una sola sección. '
+            .'Refleja TODO lo del alcance: si es una app, muestra sus pantallas y funciones principales (varias vistas enlazadas); si es un sitio o tienda, todas sus secciones/páginas clave (inicio, catálogo/servicios, detalle, contacto, etc.) con navegación que funcione. '
+            .'Usa contenido realista y MUY específico del negocio (nombres, textos, datos de ejemplo creíbles del giro). Debe sentirse como el producto TERMINADO, premium. '
+            .'Varias páginas HTML enlazadas o una página con muchas secciones completas. No necesita backend real. Sigue el PROTOCOLO DE VERIFICACIÓN antes de terminar.');
     }
 
     /** Business/scope context shared by every build mode. */

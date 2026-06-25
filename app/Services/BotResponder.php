@@ -260,7 +260,7 @@ class BotResponder
         }
 
         return $this->send($conversation, $this->claudeOr($conversation,
-            'Si quieres que ajuste algo del demo, dime y lo cambio 🙌 Y cuando te late, te paso la *cotización* para arrancar. ✅'));
+            '¡Qué bueno que te gusta! 🙌 Cuéntame qué le falta o qué información de tu negocio quieres que agregue, y lo dejo a tu medida en el demo. 🎨'));
     }
 
     /** Generate + send ONLY the detailed scope doc; the quote comes after the client OKs it. */
@@ -378,7 +378,26 @@ class BotResponder
 
     private function isYes(string $text): bool
     {
+        // A qualified or concerned reply ("me gusta pero te falta…") is NOT a clean approval.
+        if ($this->hasReservation($text)) {
+            return false;
+        }
+
         return Str::contains($text, ['aprob', 'aprueb', 'acept', 'adelante', 'dale', 'sí', 'si,', 'claro', 'ok', 'okay', 'perfecto', 'me late', 'encant', 'me gusta', 'me fascina', 'genial', 'excelente', 'procede', 'proced', 'de acuerdo', 'va pues', 'hágale', 'hagale', 'confirm']);
+    }
+
+    /** True when the client likes it BUT wants changes/more info — not a clean yes. */
+    private function hasReservation(string $text): bool
+    {
+        if (preg_match('/\b(pero|aunque|sin embargo|excepto|salvo que|nada más que)\b/u', $text)) {
+            return true;
+        }
+
+        return Str::contains($text, [
+            'te falta', 'le falta', 'me falta', 'hace falta', 'falta info', 'faltó', 'faltan', 'falta agregar',
+            'agreg', 'añad', 'cambi', 'cámbi', 'modific', 'quítale', 'quitale', 'quisiera que', 'me gustaría que',
+            'podrías', 'puedes agregar', 'puedes poner', 'puedes cambiar', 'antes quiero', 'antes de', 'una duda', 'no me gust',
+        ]);
     }
 
     /** Client wants us to handle everything ("hazlo tú", "encárgate de todo"). */
