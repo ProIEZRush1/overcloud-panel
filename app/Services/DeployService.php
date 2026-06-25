@@ -83,9 +83,8 @@ class DeployService
         // of truth, with retries for routing delay); retry the whole cycle on failure.
         for ($attempt = 1; $attempt <= (int) $c['max_attempts']; $attempt++) {
             $depUuid = $this->triggerDeploy($c, $uuid);
-            $this->waitBuild($c, $depUuid);
 
-            $verdict = $this->verifyLive($url, $content, $stack);
+            $verdict = $this->waitForLive($c, $depUuid, $url, $content, $stack);
             if ($verdict['ok']) {
                 $project->update(['status' => ProjectStatus::Live, 'delivered_at' => now()]);
                 Log::info('Deploy live', ['project' => $project->id, 'url' => $url, 'attempt' => $attempt]);
@@ -141,14 +140,25 @@ class DeployService
         return ['ok' => true, 'reason' => 'ok'];
     }
 
-    /** Verify with retries to absorb container/routing warm-up after a build. */
-    private function verifyLive(string $url, array $content, array $stack, int $tries = 10): array
+    /**
+     * Wait for the deploy: succeed the instant the live URL passes E2E (the truth),
+     * fail fast if the build errors. Polls the URL first so "live" registers within
+     * seconds of the site actually working, not after a slow build-status poll.
+     */
+    private function waitForLive(array $c, ?string $depUuid, string $url, array $content, array $stack): array
     {
         $last = ['ok' => false, 'reason' => 'sin respuesta'];
-        for ($i = 0; $i < $tries; $i++) {
+        for ($i = 0; $i < 45; $i++) {
             $last = $this->verify($url, $content, $stack);
             if ($last['ok']) {
                 return $last;
+            }
+            if ($depUuid) {
+                $status = Http::withToken($c['coolify_token'])->timeout(15)
+                    ->get($c['coolify_url']."/deployments/{$depUuid}")->json('status');
+                if (in_array($status, ['failed', 'error', 'cancelled'], true)) {
+                    return ['ok' => false, 'reason' => 'build falló ('.$last['reason'].')'];
+                }
             }
             sleep(8);
         }
@@ -284,26 +294,6 @@ class DeployService
         return Http::withToken($c['coolify_token'])->timeout(40)
             ->get($c['coolify_url'].'/deploy', ['uuid' => $uuid, 'force' => true])
             ->json('deployments.0.deployment_uuid');
-    }
-
-    private function waitBuild(array $c, ?string $depUuid): bool
-    {
-        if (! $depUuid) {
-            return false;
-        }
-        for ($i = 0; $i < 30; $i++) {
-            $status = Http::withToken($c['coolify_token'])->timeout(20)
-                ->get($c['coolify_url']."/deployments/{$depUuid}")->json('status');
-            if ($status === 'finished') {
-                return true;
-            }
-            if (in_array($status, ['failed', 'error', 'cancelled'], true)) {
-                return false;
-            }
-            sleep(9);
-        }
-
-        return false;
     }
 
     private function fetchLogs(array $c, ?string $depUuid): string
