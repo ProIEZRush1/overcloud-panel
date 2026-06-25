@@ -47,8 +47,21 @@ class BuildDemo implements ShouldQueue
         $conv = $lead->conversations()->where('is_group', false)->first();
         $account = $conv?->whatsappAccount;
         if ($conv && $account) {
-            $gateway->sendText($account->session_name, $conv->contact_jid,
-                "¡Aquí está tu *demo*! 🎨 Mira cómo se vería tu proyecto en vivo:\n{$url}\n\n¿Qué te parece? Si te late, te paso la *cotización* para arrancar. ✅");
+            $text = "¡Aquí está tu *demo*! 🎨 Mira cómo se vería tu proyecto en vivo:\n{$url}\n\n¿Qué te parece? Si te late, te paso la *cotización* para arrancar. ✅";
+            $out = $conv->messages()->create([
+                'direction' => \App\Enums\MessageDirection::Out,
+                'type' => \App\Enums\MessageType::Text,
+                'body' => $text,
+                'status' => \App\Enums\MessageStatus::Pending,
+                'is_from_me' => true,
+                'ai_generated' => true,
+                'wa_timestamp' => now(),
+            ]);
+            $r = $gateway->sendText($account->session_name, $conv->contact_jid, $text);
+            $out->update([
+                'status' => ! empty($r['wa_message_id']) ? \App\Enums\MessageStatus::Sent : \App\Enums\MessageStatus::Pending,
+                'wa_message_id' => $r['wa_message_id'] ?? null,
+            ]);
         }
     }
 }

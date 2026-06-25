@@ -54,17 +54,39 @@ class WhatsAppGateway
 
     public function sendText(string $session, string $to, string $text, ?string $quoted = null): array
     {
-        return $this->client()->post("/sessions/{$session}/send", array_filter([
+        return $this->postSend($session, array_filter([
             'to' => $to, 'text' => $text, 'quoted' => $quoted,
-        ]))->throw()->json();
+        ]));
     }
 
     /** $media = ['base64'=>..., 'mimetype'=>..., 'fileName'=>..., 'caption'=>..., 'kind'=>'image|document|audio|video'] */
     public function sendMedia(string $session, string $to, array $media): array
     {
-        return $this->client()->post("/sessions/{$session}/send", [
-            'to' => $to, 'media' => $media,
-        ])->throw()->json();
+        return $this->postSend($session, ['to' => $to, 'media' => $media]);
+    }
+
+    /**
+     * POST a send and retry until WhatsApp actually confirms it (returns a wa_message_id).
+     * Baileys can answer HTTP 200 with ok:false / no id (accepted but NOT delivered), which
+     * silently dropped demo links and replies — so we retry instead of trusting the 200.
+     */
+    private function postSend(string $session, array $payload): array
+    {
+        $last = ['ok' => false];
+        for ($i = 0; $i < 3; $i++) {
+            try {
+                $r = (array) $this->client()->post("/sessions/{$session}/send", $payload)->throw()->json();
+                if (! empty($r['wa_message_id'])) {
+                    return $r;
+                }
+                $last = $r ?: $last;
+            } catch (\Throwable $e) {
+                $last = ['ok' => false, 'error' => $e->getMessage()];
+            }
+            usleep(1500000); // 1.5s before retrying a transient gateway/Baileys hiccup
+        }
+
+        return $last;
     }
 
     public function createGroup(string $session, string $subject, array $participants): array
