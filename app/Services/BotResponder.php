@@ -369,7 +369,7 @@ class BotResponder
 
     private function isYes(string $text): bool
     {
-        return Str::contains($text, ['aprob', 'aprueb', 'acept', 'adelante', 'dale', 'sí', 'si,', 'claro', 'ok', 'okay', 'perfecto', 'me late', 'procede', 'de acuerdo', 'va pues', 'hágale', 'hagale', 'confirm']);
+        return Str::contains($text, ['aprob', 'aprueb', 'acept', 'adelante', 'dale', 'sí', 'si,', 'claro', 'ok', 'okay', 'perfecto', 'me late', 'encant', 'me gusta', 'me fascina', 'genial', 'excelente', 'procede', 'proced', 'de acuerdo', 'va pues', 'hágale', 'hagale', 'confirm']);
     }
 
     /** Client wants us to handle everything ("hazlo tú", "encárgate de todo"). */
