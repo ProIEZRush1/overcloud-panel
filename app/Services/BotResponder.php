@@ -90,7 +90,9 @@ class BotResponder
         $this->detectService($lead, $inbound->body ?? '');
         $lead = $lead->fresh();
 
-        if ($lead->service_id && $this->wantsProposal($text)) {
+        // An explicit request OR any affirmative ("sí/va/dale") moves us to the scope —
+        // never make the client type a magic keyword.
+        if ($lead->service_id && ($this->wantsProposal($text) || $this->isYes($text))) {
             return $this->sendScope($conversation, $lead);
         }
 
@@ -100,7 +102,7 @@ class BotResponder
         }
 
         return $this->send($conversation, $this->claudeOr($conversation,
-            "¡Excelente! 🙌 Para armar tu propuesta cuéntame:\n• ¿Cuántas secciones o páginas?\n• ¿En cuántos idiomas?\n• ¿Ya tienes logo y textos?\n\nO si prefieres, te paso ya una propuesta base — solo dime *cotización*. ✅"));
+            "¡Excelente! 🙌 Para preparar tu *alcance* cuéntame:\n• ¿Cuántas secciones o páginas?\n• ¿En cuántos idiomas?\n• ¿Ya tienes logo, textos o algún sitio de referencia?\n\nO si ya lo tienes claro, dime *va* y te preparo el *alcance* detallado de tu proyecto. ✅"));
     }
 
     private function onQuoted(Conversation $conversation, Lead $lead, string $text): ?Message
@@ -450,8 +452,11 @@ class BotResponder
     {
         $history = $this->history($conversation);
         $system = 'Eres el asistente de ventas de Overcloud, una agencia que crea páginas, sitios web, tiendas en línea y apps a precios accesibles. '
-            .'Hablas español, cálido, breve y profesional. Tu objetivo: entender qué necesita el cliente (tipo de proyecto, páginas, idiomas, si tiene logo/textos) para preparar una propuesta. '
-            .'Haz una pregunta a la vez. No inventes precios. Si el cliente ya quiere la cotización, anímalo a que te diga "cotización". '
+            .'Hablas español, cálido, breve y profesional. Tu objetivo: entender qué necesita el cliente (tipo de proyecto, páginas, idiomas, si tiene logo/textos o sitios de referencia) para prepararle su proyecto. '
+            .'FLUJO en este orden, explícalo si ayuda: 1) le preparas un *alcance* detallado (un documento, sin costo) con todo lo que incluye; 2) le armas un *demo visual* en vivo para que lo vea; 3) hasta el final, la *cotización*. '
+            .'Cuando el cliente confirme que quiere avanzar (un "sí", "va", "dale"…), NO le pidas que escriba ninguna palabra clave: simplemente dile que le preparas su *alcance* enseguida. Nunca presentes "cotización" como primer paso ni le pidas teclear palabras. '
+            .'Haz una pregunta a la vez. No inventes precios. '
+            .'Si el cliente comparte un enlace de referencia (su sitio actual, un ejemplo, etc.), agradécelo y dile que lo revisarás a fondo para tomarlo de base. '
             .'Si pregunta por tiempos de entrega: la entrega es muy rápida, el proyecto queda listo en 1 día o menos, y los cambios o correcciones se hacen cuando el cliente los pida. Nunca menciones plazos de semanas.';
 
         $reply = $this->assistant->message($system, $history);
