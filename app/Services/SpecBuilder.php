@@ -28,20 +28,13 @@ class SpecBuilder
         $languages = $lead->languages ?: ['es'];
         $version = ($lead->specs()->max('version') ?? 0) + 1;
 
-        $content = [
-            'service' => $service->name,
-            'overview' => $this->overview($lead, $service),
-            'objectives' => $this->objectives($key),
-            'pages' => $this->detailedPages($key, $pages),
-            'features' => $this->detailedFeatures($key),
-            'languages' => $languages,
-            'deliverables' => $this->deliverables($key),
-            'technical' => $this->technical(),
-            'process' => $this->process(),
-            'out_of_scope' => $this->outOfScope(),
-            'timeline_days' => $service->default_timeline_days,
-            'notes' => $lead->summary,
-        ];
+        // Claude writes the full professional, project-specific scope from the
+        // conversation — nothing predefined. Hardcoded content is only a fallback.
+        $content = $this->generateScope($lead, $service) ?? $this->fallbackScope($lead, $service, $pages);
+        $content['service'] = $service->name;
+        $content['languages'] = $languages;
+        $content['timeline_days'] = $content['timeline_days'] ?? $service->default_timeline_days;
+        $content['notes'] = $content['notes'] ?? $lead->summary;
 
         $spec = $lead->specs()->create([
             'version' => $version,
@@ -56,6 +49,67 @@ class SpecBuilder
         }
 
         return $spec;
+    }
+
+    /** Claude generates the entire scope (objectives, features, pages, deliverables…) for THIS project. */
+    private function generateScope(Lead $lead, Service $service): ?array
+    {
+        if (! $this->assistant->isEnabled()) {
+            return null;
+        }
+        $prompt = 'Eres consultor senior de Overcloud, una agencia que construye software REAL y profesional (no páginas simples). '
+            .'Con base en la conversación con el cliente, define el ALCANCE detallado y PROFESIONAL del proyecto que se construirá de verdad. '
+            .'Incluye TODO lo que un proyecto así necesita en serio: p.ej. una tienda en línea lleva catálogo administrable, carrito, pagos con tarjeta '
+            .'(Stripe), panel de administración, gestión de pedidos, cuentas de cliente e inventario; una plataforma de gestión lleva su panel, roles, '
+            .'reportes, etc. Adáptalo a ESTE negocio en específico, sé concreto. Responde ÚNICAMENTE con JSON válido (sin ```), en español, así: '
+            .'{"overview":"<2-3 frases>","objectives":["..."],"pages":[{"name":"","desc":""}],"features":[{"name":"","desc":""}],'
+            .'"deliverables":["..."],"technical":["..."],"process":["..."],"out_of_scope":["..."],"timeline_days":<entero de días>}.'
+            ."\n\nTipo de proyecto: ".$service->name.'. Negocio: '.($lead->company ?: ($lead->name ?: 'sin nombre'))
+            .".\nLo que pidió el cliente:\n".$this->conversationContext($lead);
+
+        try {
+            $arr = json_decode($this->extractJson($this->assistant->complete($prompt)) ?? '', true);
+
+            return (is_array($arr) && ! empty($arr['features'])) ? $arr : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    private function conversationContext(Lead $lead): string
+    {
+        $conv = $lead->conversations()->where('is_group', false)->latest('updated_at')->first();
+        $chat = $conv?->messages()->where('is_from_me', false)->latest()->take(12)->get()
+            ->reverse()->pluck('body')->filter()->implode("\n") ?? '';
+
+        return trim(($lead->summary ? 'Resumen: '.$lead->summary."\n\n" : '').$chat)
+            ?: ($lead->summary ?: 'Proyecto profesional a la medida.');
+    }
+
+    private function extractJson(?string $s): ?string
+    {
+        if (! $s) {
+            return null;
+        }
+
+        return preg_match('/\{.*\}/s', $s, $m) ? $m[0] : $s;
+    }
+
+    /** Deterministic fallback, only used if Claude is unavailable. */
+    private function fallbackScope(Lead $lead, Service $service, int $pages): array
+    {
+        $key = $service->key;
+
+        return [
+            'overview' => $this->overview($lead, $service),
+            'objectives' => $this->objectives($key),
+            'pages' => $this->detailedPages($key, $pages),
+            'features' => $this->detailedFeatures($key),
+            'deliverables' => $this->deliverables($key),
+            'technical' => $this->technical(),
+            'process' => $this->process(),
+            'out_of_scope' => $this->outOfScope(),
+        ];
     }
 
     private function overview(Lead $lead, Service $service): string
@@ -157,10 +211,13 @@ class SpecBuilder
     {
         return match ($key) {
             'ecommerce' => [
-                ['name' => 'Catálogo administrable', 'desc' => 'Alta, edición y baja de productos con fotos, precios, variantes e inventario desde tu panel.'],
-                ['name' => 'Carrito y checkout', 'desc' => 'Proceso de compra completo con resumen, cantidades y confirmación.'],
-                ['name' => 'Pago con tarjeta', 'desc' => 'Integración con pasarela segura (MercadoPago/Stripe) para cobrar en línea.'],
-                ['name' => 'Gestión de pedidos', 'desc' => 'Panel para ver, dar seguimiento y actualizar el estado de cada pedido.'],
+                ['name' => 'Catálogo de productos', 'desc' => 'Productos con fotos, descripción, variantes (talla/color), categorías, búsqueda y filtros.'],
+                ['name' => 'Carrito de compras', 'desc' => 'Agregar, actualizar y quitar productos con cálculo de totales en tiempo real.'],
+                ['name' => 'Pagos con tarjeta (Stripe)', 'desc' => 'Cobro en línea seguro con tarjeta de crédito/débito mediante Stripe.'],
+                ['name' => 'Panel de administración', 'desc' => 'Administra productos, categorías, inventario, precios y pedidos desde un panel privado.'],
+                ['name' => 'Gestión de pedidos', 'desc' => 'Recibe pedidos, controla su estado y da seguimiento a cada venta.'],
+                ['name' => 'Cuentas de cliente', 'desc' => 'Registro, inicio de sesión e historial de compras de tus clientes.'],
+                ['name' => 'Control de inventario', 'desc' => 'Stock por producto que se descuenta automáticamente con cada venta.'],
                 ['name' => 'Notificaciones', 'desc' => 'Confirmación de pedido al cliente por correo y/o WhatsApp.'],
             ],
             'webapp' => [
@@ -198,7 +255,8 @@ class SpecBuilder
             'Soporte de arranque tras el lanzamiento.',
         ];
         if ($key === 'ecommerce') {
-            $common[] = 'Tienda lista para recibir pedidos y pagos.';
+            $common[] = 'Tienda en línea funcional con panel de administración, pagos con tarjeta (Stripe) y gestión de pedidos.';
+            $common[] = 'Accesos al panel de administración para gestionar tu catálogo, inventario y ventas.';
         }
         if ($key === 'mobileapp') {
             $common[] = 'App publicada (o lista para publicar) en las tiendas.';

@@ -319,8 +319,16 @@ class DeployService
     private function usesCustomBuild(Project $project, array $stack): bool
     {
         $brief = (array) ($project->brief ?? []);
+        if (array_key_exists('custom', $brief)) {
+            return (bool) $brief['custom'];
+        }
+        if (empty($stack['repo'])) {
+            return true;
+        }
 
-        return ($brief['custom'] ?? false) === true || empty($stack['repo']);
+        // Real, functional projects are generated on-the-moment by Claude Code from the
+        // scope; only a plain landing/marketing site uses the light content template.
+        return ! in_array($project->lead?->service?->key, ['landing'], true);
     }
 
     private function createRepo(array $c, string $name): bool

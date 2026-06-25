@@ -60,16 +60,20 @@ class AgentBuildService
     {
         $lead = $project->lead;
         $who = $lead?->company ?: ($lead?->name ?: 'el negocio');
+        $spec = $lead?->specs()->latest()->first();
+        $features = collect($spec?->content['features'] ?? [])
+            ->map(fn ($f) => is_array($f) ? trim(($f['name'] ?? '').' — '.($f['desc'] ?? '')) : $f)
+            ->filter()->implode("\n- ");
 
-        return "Construye un proyecto web DESPLEGABLE (stack: {$stack}) para «{$who}». "
-            .'Necesidad del cliente: '.($lead?->summary ?? 'sitio profesional a la medida').'. '
-            .'Debe ser moderno, responsivo y en español, usando este contenido base (JSON): '
-            .json_encode($content, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES).'. '
-            .'OBLIGATORIO: un footer que diga "Desarrollado por Overcloud" donde "Overcloud" enlaza a '
-            .'https://wa.me/5215594356241, y un "¿Quieres tu sitio? Escríbenos por WhatsApp" al mismo enlace. '
-            .'Incluye un Dockerfile que CONSTRUYA y SIRVA la app exponiendo el puerto correcto (bind 0.0.0.0), '
-            .'horneando los assets en la imagen para un build rápido. Si el framework ignora archivos de build/env '
-            .'necesarios, recuérdalo en un .dockerignore correcto. Escribe TODOS los archivos en el directorio actual. '
+        return "Construye una APLICACIÓN WEB REAL Y FUNCIONAL (stack: {$stack}) para «{$who}» — NO una landing page. "
+            .'Necesidad del cliente: '.($lead?->summary ?? 'plataforma profesional a la medida').".\n\n"
+            .'IMPLEMENTA DE VERDAD estas funcionalidades del alcance aprobado (con su base de datos, panel de administración y lógica real):'
+            .($features !== '' ? "\n- ".$features : "\n- ".json_encode($content['features'] ?? [], JSON_UNESCAPED_UNICODE))."\n\n"
+            .'Si es una tienda: catálogo administrable, carrito, pagos con Stripe (claves por env), panel de administración y gestión de pedidos, todo funcional. '
+            .'Moderno, responsivo, en español. OBLIGATORIO: footer "Desarrollado por Overcloud" enlazando https://wa.me/5215594356241, '
+            .'y "¿Quieres tu sitio? Escríbenos por WhatsApp" al mismo enlace. '
+            .'Incluye un Dockerfile que construya y sirva la app (bind 0.0.0.0, puerto correcto), con assets horneados para un build rápido, '
+            .'un .dockerignore correcto, y migraciones+seed que se ejecuten al arrancar. Escribe TODOS los archivos en el directorio actual. '
             .'NO hagas git push ni despliegues: solo deja el proyecto listo para construir con Docker.';
     }
 
