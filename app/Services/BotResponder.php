@@ -345,6 +345,9 @@ class BotResponder
         if (! empty($snap['clabe'])) {
             $msg .= '🔢 CLABE: '.$snap['clabe']."\n";
         }
+        if (! empty($snap['instructions'])) {
+            $msg .= $snap['instructions']."\n";
+        }
         $msg .= '📝 Ref: '.$pr->reference."\n\nCuando transfieras, mándame el *comprobante* (foto o PDF) por aquí y verifico tu pago. 🙌";
 
         return $this->send($conversation, $msg);

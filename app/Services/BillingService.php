@@ -202,7 +202,8 @@ class BillingService
             ! empty($s['bank']) ? '🏦 '.$s['bank'] : null,
             ! empty($s['beneficiary']) ? '👤 '.$s['beneficiary'] : null,
             ! empty($s['clabe']) ? '🔢 CLABE: '.$s['clabe'] : null,
-            ! empty($s['account']) ? '💳 Cuenta: '.$s['account'] : null,
+            ! empty($s['account_number']) ? '#️⃣ Cuenta: '.$s['account_number'] : null,
+            ! empty($s['instructions']) ? $s['instructions'] : null,
             '📝 Concepto: '.$pr->reference,
         ]);
 
