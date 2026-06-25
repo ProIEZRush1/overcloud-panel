@@ -40,7 +40,10 @@ class AgentBuildService
     /** Apply a client-requested change to an existing project checkout. */
     public function change(Project $project, string $dir, string $instruction): bool
     {
-        $prompt = 'Aplica este cambio solicitado por el cliente al proyecto que está en el directorio actual: "'.$instruction.'". '
+        $prompt = 'Aplica EXACTAMENTE este cambio solicitado por el cliente al proyecto en el directorio actual: "'.$instruction.'". '
+            .'Identifica con precisión el elemento exacto que menciona (p. ej. "botón flotante de WhatsApp" = el botón fijo/flotante de WhatsApp, normalmente abajo a la derecha) '
+            .'y aplica el cambio en TODOS los archivos relevantes (HTML y CSS). Si es un color, cambia el valor del color de ESE elemento en el CSS. '
+            .'Antes de terminar, VERIFICA leyendo los archivos que el cambio realmente quedó reflejado (busca el valor nuevo). '
             .'Conserva el resto del sitio funcionando, mantén el footer "Desarrollado por Overcloud", el Dockerfile y la configuración de despliegue. '
             .'Si el cambio afecta los assets (CSS/JS), reconstrúyelos para que queden horneados. NO hagas git push ni despliegues; solo edita los archivos.';
 
@@ -57,7 +60,8 @@ class AgentBuildService
         $prompt = "Construye un DEMO visual de UNA sola página (index.html, styles.css y script.js si ayuda) para «{$who}». "
             .'Es un demo para que el cliente VEA cómo se vería su proyecto y se enamore — no necesita backend ni ser 100% funcional, pero debe verse increíble. '
             .'Necesidad del cliente: '.($lead->summary ?? 'sitio profesional').'. Muestra visualmente: '.($features !== '' ? $features : 'las secciones principales').'. '
-            .'Diseño moderno, atractivo y responsivo, en español. Imágenes desde https://picsum.photos/seed/<palabra>/<ancho>/<alto>. '
+            .'Diseño moderno, atractivo y responsivo, en español. '
+            .$this->imageRules()
             .'OBLIGATORIO: footer "Desarrollado por Overcloud" enlazando https://wa.me/5215594356241. '
             .'Incluye un Dockerfile que sirva los archivos estáticos en el puerto 8080: FROM python:3-alpine / WORKDIR /app / COPY . /app / EXPOSE 8080 / CMD ["python","-m","http.server","8080"]. '
             .'Escribe TODOS los archivos COMPLETOS en el directorio actual AHORA, no expliques. NO hagas git push ni despliegues.';
@@ -106,7 +110,8 @@ class AgentBuildService
             ."Inspírate en estas funcionalidades del alcance:\n- ".($features !== '' ? $features : 'sitio profesional a la medida')."\n\n"
             .'REQUISITOS TÉCNICOS (cúmplelos para que despliegue sin fallar en UN solo intento): '
             .'Usa SOLO HTML + CSS + JavaScript puro (sin frameworks de backend, sin composer ni npm) para que sea autónomo, rápido y confiable. '
-            .'Diseño moderno, responsivo y de buen gusto, en español. Imágenes desde https://picsum.photos/seed/<palabra>/<ancho>/<alto>. '
+            .'Diseño moderno, responsivo y de buen gusto, en español. '
+            .$this->imageRules()
             .'OBLIGATORIO: un footer en todas las páginas que diga "Desarrollado por Overcloud" donde "Overcloud" enlaza a https://wa.me/5215594356241, '
             .'y "¿Quieres tu sitio? Escríbenos por WhatsApp" al mismo enlace. '
             .'Incluye un Dockerfile sencillo que sirva los archivos estáticos en el puerto 8080 con bind 0.0.0.0, por ejemplo: '
@@ -120,5 +125,16 @@ class AgentBuildService
             .mb_substr($logs, 0, 4000)."\n\n"
             .'Diagnostica la causa y CORRIGE los archivos del proyecto en el directorio actual para que el build de Docker '
             .'pase y la app sirva en su puerto. NO hagas push ni despliegues; solo corrige los archivos.';
+    }
+
+    /** Image guidance: never random/mismatched stock; prefer on-theme gradients/emojis. */
+    private function imageRules(): string
+    {
+        return 'IMÁGENES: NO uses picsum.photos ni fotos aleatorias o genéricas, y JAMÁS paisajes, ciudades, '
+            .'monumentos o lugares ajenos al giro del negocio (nada de puentes, rascacielos u otros países). '
+            .'Prioriza gradientes CSS, colores de marca, patrones y emojis/íconos temáticos grandes para fondos, '
+            .'héroes y tarjetas (siempre cargan y siempre son del tema). Si de verdad necesitas una foto real, usa '
+            .'https://source.unsplash.com/<ancho>x<alto>/?<palabras> con palabras MUY específicas del giro '
+            .'(p. ej. una taquería: tacos,comida-mexicana; una cafetería: coffee,cafe). ';
     }
 }

@@ -518,11 +518,34 @@ class DeployService
         for ($i = 1; $i <= 3; $i++) {
             $dep = $this->triggerDeploy($c, $project->coolify_app_uuid);
             if ($this->waitForLive($c, $dep, $project->prod_url, $content, $stack)['ok']) {
+                // Clear Cloudflare's edge cache so the client sees the change right away.
+                $this->purgeCache($c, $project->prod_url);
+
                 return true;
             }
         }
 
         return false;
+    }
+
+    /** Purge the site's cached assets at Cloudflare so changes are visible immediately. */
+    private function purgeCache(array $c, ?string $url): void
+    {
+        if (empty($c['cloudflare_token']) || empty($c['cloudflare_zone']) || ! $url) {
+            return;
+        }
+        $base = rtrim($url, '/');
+        $files = array_map(fn ($p) => $base.$p, [
+            '/', '/index.html', '/styles.css', '/style.css', '/css/styles.css', '/css/style.css',
+            '/script.js', '/main.js', '/app.js', '/js/script.js', '/js/main.js',
+            '/menu.html', '/galeria.html', '/contacto.html', '/productos.html', '/tienda.html', '/nosotros.html',
+        ]);
+        try {
+            Http::withToken($c['cloudflare_token'])->timeout(20)
+                ->post("https://api.cloudflare.com/client/v4/zones/{$c['cloudflare_zone']}/purge_cache", ['files' => $files]);
+        } catch (\Throwable $e) {
+            Log::warning('purgeCache failed', ['e' => $e->getMessage()]);
+        }
     }
 
     private function cloneRepo(array $c, string $name, string $dir): bool
