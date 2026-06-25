@@ -62,7 +62,8 @@ class TestScenarios extends Command
                 'stage' => $stage, 'service_id' => $withService ? $website->id : null,
                 'company' => 'Boutique Test', 'summary' => 'tienda en línea de ropa con catálogo y pagos',
             ]);
-            $conv = $account->conversations()->create([
+            $conv = \App\Models\Conversation::create([
+                'whatsapp_account_id' => $account->id,
                 'lead_id' => $lead->id, 'contact_jid' => $lead->phone.'@s.whatsapp.net',
                 'contact_phone' => $lead->phone, 'is_group' => false, 'ai_enabled' => true,
             ]);
