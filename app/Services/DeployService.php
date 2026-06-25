@@ -22,7 +22,7 @@ class DeployService
 {
     private const OWNER_WA = '5215594356241';
 
-    public function __construct(private Assistant $assistant, private AgentBuildService $agent) {}
+    public function __construct(private Assistant $assistant, private AgentBuildService $agent, private WhatsAppGateway $gateway) {}
 
     public function isConfigured(): bool
     {
@@ -44,6 +44,10 @@ class DeployService
         $stackKey = $this->pickStack($project);
         $stack = $c['stacks'][$stackKey] ?? $c['stacks'][$c['default_stack']];
         $name = Str::slug(($project->lead?->company ?: $project->lead?->name ?: 'sitio')).'-'.Str::lower(Str::random(5));
+        $label = $this->projectLabel($project);
+
+        $this->notify($project, "¡Manos a la obra! 🛠️ Empecé a construir {$label}. Te voy contando el avance por aquí. 🙌");
+
         $content = $this->generateContent($project);
 
         // Hybrid: fast template path by default; escalate to an on-the-moment Claude
@@ -51,6 +55,7 @@ class DeployService
         $custom = $this->usesCustomBuild($project, $stack);
         $dir = $custom ? storage_path('builds/'.$name) : null;
         if ($custom) {
+            $this->notify($project, "Estoy desarrollando {$label} a la medida — diseño, funciones y panel de administración. Esto toma unos minutos. ⚙️");
             if (! $this->agent->isAvailable()
                 || ! $this->agent->build($project, $stackKey, $content, $dir)
                 || ! $this->createRepo($c, $name)
@@ -58,6 +63,7 @@ class DeployService
                 return $this->fail($project, 'no se pudo construir el proyecto a la medida');
             }
         } else {
+            $this->notify($project, "Estoy armando {$label} con tu diseño y contenido. 🎨");
             if (! $this->generateRepo($c, $stack['repo'], $name)) {
                 return $this->fail($project, 'no se pudo crear el repositorio');
             }
@@ -79,6 +85,8 @@ class DeployService
             'brief' => $brief,
         ]);
 
+        $this->notify($project, "¡Ya casi! 🚀 Estoy publicando {$label} en línea y revisando que todo funcione bien...");
+
         // Self-heal: deploy -> wait for the build -> E2E verify the LIVE URL (the source
         // of truth, with retries for routing delay); retry the whole cycle on failure.
         for ($attempt = 1; $attempt <= (int) $c['max_attempts']; $attempt++) {
@@ -93,6 +101,9 @@ class DeployService
             }
 
             Log::warning('Deploy attempt failed', ['project' => $project->id, 'attempt' => $attempt, 'reason' => $verdict['reason']]);
+            if ($attempt < (int) $c['max_attempts']) {
+                $this->notify($project, "Estoy afinando unos detalles para que {$label} quede perfecto. 🔧");
+            }
             // On a custom build, let Claude Code repair the repo from the logs before retrying.
             if ($custom && $dir && $this->agent->repair($project, $stackKey, $dir, $this->fetchLogs($c, $depUuid))) {
                 $this->pushDir($c, $dir, $name);
@@ -358,8 +369,33 @@ class DeployService
         }
     }
 
+    /** Best-effort progress message to the client's DM during the build/deploy. */
+    private function notify(Project $project, string $message): void
+    {
+        try {
+            $conv = $project->lead?->conversations()->where('is_group', false)->first();
+            if ($conv && $conv->whatsappAccount) {
+                $this->gateway->sendText($conv->whatsappAccount->session_name, $conv->contact_jid, $message);
+            }
+        } catch (\Throwable $e) {
+            // progress is best-effort
+        }
+    }
+
+    private function projectLabel(Project $project): string
+    {
+        return match ($project->lead?->service?->key) {
+            'ecommerce' => 'tu tienda en línea',
+            'mobileapp', 'app' => 'tu aplicación',
+            'webapp' => 'tu plataforma',
+            'landing' => 'tu landing',
+            default => 'tu sitio web',
+        };
+    }
+
     private function fail(Project $project, string $why): ?string
     {
+        $this->notify($project, 'Tuve un detalle técnico publicando tu proyecto. Mi equipo ya está al tanto y lo resolvemos enseguida. 🙏');
         $project->update(['status' => ProjectStatus::Review]);
         Log::error('Autodeploy failed', ['project' => $project->id, 'why' => $why]);
 
