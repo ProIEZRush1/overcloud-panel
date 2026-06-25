@@ -35,13 +35,22 @@ class DeployProject implements ShouldQueue
             return;
         }
 
+        $conv = $project->lead?->conversations()->where('is_group', false)->first();
+        $account = $conv?->whatsappAccount;
+
         $url = $deploy->deploy($project);
+
+        // Deploy failed E2E after retries — alert the owner, don't bother the client.
         if (! $url) {
+            if ($account) {
+                $owner = config('overcloud.company.owner_phone');
+                $gateway->sendText($account->session_name, $owner.'@s.whatsapp.net',
+                    "⚠️ El despliegue del proyecto *{$project->name}* no pasó las pruebas tras varios intentos. Requiere revisión manual.");
+            }
+
             return;
         }
 
-        $conv = $project->lead?->conversations()->where('is_group', false)->first();
-        $account = $conv?->whatsappAccount;
         if ($conv && $account) {
             $gateway->sendText($account->session_name, $conv->contact_jid,
                 "¡Buenas noticias! 🚀 Tu sitio ya está en línea:\n{$url}\n\nRevísalo y cualquier ajuste me dices por aquí. 🙌");

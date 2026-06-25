@@ -3,18 +3,19 @@
 namespace App\Services;
 
 use App\Contracts\Assistant;
+use App\Enums\ProjectStatus;
 use App\Models\Project;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
- * Autonomously builds + deploys a client's Laravel+Vue site:
- *  1. AI generates the site content (content.json) from the confirmed scope.
- *  2. Generates a repo from the GitHub template (overcloud-client-template).
- *  3. Injects the content; the template is content-driven so no rebuild is needed.
- *  4. Creates a Coolify app (Dockerfile, fast composer-only build) and deploys it.
- *  5. Waits for the live URL and stores it on the project.
+ * Autonomously builds, deploys and self-heals a client's site/app:
+ *  1. Pick the stack (Laravel+Vue for sites, Flutter Web for apps, Next.js/static).
+ *  2. AI generates content (content.json) from the confirmed scope.
+ *  3. Generate a repo from the stack's GitHub template + inject content.
+ *  4. Create a Coolify app, then loop: deploy -> wait build -> E2E verify the live
+ *     URL actually works; retry on failure up to max_attempts. Only "live" when verified.
  */
 class DeployService
 {
@@ -37,29 +38,94 @@ class DeployService
             return null;
         }
         $c = config('overcloud.deploy');
-        $project->loadMissing('lead.service', 'quote.spec');
+        $project->loadMissing('lead.service');
 
+        $stackKey = $this->pickStack($project);
+        $stack = $c['stacks'][$stackKey] ?? $c['stacks'][$c['default_stack']];
         $name = Str::slug(($project->lead?->company ?: $project->lead?->name ?: 'sitio')).'-'.Str::lower(Str::random(5));
         $content = $this->generateContent($project);
 
-        if (! $this->generateRepo($c, $name)) {
-            return null;
+        if (! $this->generateRepo($c, $stack['repo'], $name)) {
+            return $this->fail($project, 'no se pudo crear el repositorio');
         }
         $this->updateContent($c, $name, $content);
 
-        $url = $this->createApp($c, $name);
-        if (! $url) {
-            return null;
+        [$uuid, $url] = $this->createApp($c, $name, $stack['port']);
+        if (! $uuid) {
+            return $this->fail($project, 'no se pudo crear la app en Coolify');
         }
 
-        $live = $this->waitLive($url);
+        $brief = (array) ($project->brief ?? []);
+        $brief['stack'] = $stackKey;
         $project->update([
-            'prod_url' => $url,
+            'status' => ProjectStatus::Building,
+            'coolify_app_uuid' => $uuid,
             'repo_url' => "https://github.com/{$c['github_owner']}/{$name}",
-            'status' => $live ? 'live' : 'building',
+            'prod_url' => $url,
+            'brief' => $brief,
         ]);
 
-        return $url;
+        // Self-heal: deploy -> wait for the build -> E2E verify the live URL; retry.
+        for ($attempt = 1; $attempt <= (int) $c['max_attempts']; $attempt++) {
+            $depUuid = $this->triggerDeploy($c, $uuid);
+            $built = $this->waitBuild($c, $depUuid);
+
+            if ($built) {
+                $verdict = $this->verify($url, $content, $stack);
+                if ($verdict['ok']) {
+                    $project->update(['status' => ProjectStatus::Live, 'delivered_at' => now()]);
+                    Log::info('Deploy live', ['project' => $project->id, 'url' => $url, 'attempt' => $attempt]);
+
+                    return $url;
+                }
+                $reason = 'E2E: '.$verdict['reason'];
+            } else {
+                $reason = 'build falló';
+            }
+
+            Log::warning('Deploy attempt failed', ['project' => $project->id, 'attempt' => $attempt, 'reason' => $reason]);
+            $this->autoFix($c, $name, $stack, $this->fetchLogs($c, $depUuid), $reason);
+            sleep(4);
+        }
+
+        return $this->fail($project, 'no pasó las pruebas tras varios intentos');
+    }
+
+    /** Apps -> Flutter Web; sites -> default (Laravel+Vue). Explicit brief.stack wins. */
+    public function pickStack(Project $project): string
+    {
+        $c = config('overcloud.deploy');
+        $brief = (array) ($project->brief ?? []);
+        if (! empty($brief['stack']) && isset($c['stacks'][$brief['stack']])) {
+            return $brief['stack'];
+        }
+        $key = $project->lead?->service?->key;
+        if (in_array($key, ['mobileapp', 'app', 'webapp'], true)) {
+            return 'flutter';
+        }
+
+        return $c['default_stack'];
+    }
+
+    /** E2E: the live page must respond 200 and contain the stack's required markers. */
+    public function verify(string $url, array $content, array $stack): array
+    {
+        try {
+            $r = Http::timeout(15)->get($url);
+        } catch (\Throwable $e) {
+            return ['ok' => false, 'reason' => 'sin respuesta'];
+        }
+        if (! $r->successful()) {
+            return ['ok' => false, 'reason' => 'HTTP '.$r->status()];
+        }
+        $html = $r->body();
+        foreach (($stack['markers'] ?? []) as $m) {
+            if (! Str::contains($html, $m)) {
+                return ['ok' => false, 'reason' => "falta '{$m}'"];
+            }
+        }
+
+        return ['ok' => true, 'reason' => 'ok'];
     }
 
     private function generateContent(Project $project): array
@@ -69,7 +135,7 @@ class DeployService
             return $default;
         }
         $lead = $project->lead;
-        $spec = $project->quote?->spec ?? $lead?->latestSpec;
+        $spec = $lead?->specs()->latest()->first();
         try {
             $system = 'Eres un diseñador de contenido web. Genera el contenido para un sitio. Responde ÚNICAMENTE con JSON válido (sin ```), con esta forma: '
                 .'{"business","tagline","theme":{"primary","accent"},"hero":{"eyebrow","title","subtitle","cta"},'
@@ -87,7 +153,6 @@ class DeployService
             if (is_array($arr) && ! empty($arr['business'])) {
                 $arr = array_merge($default, $arr);
                 $arr['built_by_whatsapp'] = self::OWNER_WA;
-                // ensure product seeds exist for images
                 foreach ($arr['products'] ?? [] as $i => &$p) {
                     $p['seed'] = $p['seed'] ?? ('p'.$i.Str::random(3));
                 }
@@ -135,10 +200,10 @@ class DeployService
         ];
     }
 
-    private function generateRepo(array $c, string $name): bool
+    private function generateRepo(array $c, string $templateRepo, string $name): bool
     {
         $r = Http::withToken($c['github_token'])->withHeaders(['Accept' => 'application/vnd.github+json'])
-            ->post("https://api.github.com/repos/{$c['github_owner']}/{$c['template_repo']}/generate", [
+            ->post("https://api.github.com/repos/{$c['github_owner']}/{$templateRepo}/generate", [
                 'owner' => $c['github_owner'], 'name' => $name, 'private' => false,
             ]);
         if (! $r->successful()) {
@@ -146,54 +211,100 @@ class DeployService
 
             return false;
         }
-        sleep(2); // let GitHub settle the new repo
+        sleep(2);
 
         return true;
     }
 
+    /** Inject the AI content into whichever content.json path the stack uses. */
     private function updateContent(array $c, string $repo, array $content): void
     {
-        $path = 'resources/content.json';
-        $url = "https://api.github.com/repos/{$c['github_owner']}/{$repo}/contents/{$path}";
-        $get = Http::withToken($c['github_token'])->get($url);
-        $sha = $get->successful() ? $get->json('sha') : null;
-        $json = json_encode($content, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        Http::withToken($c['github_token'])->put($url, array_filter([
-            'message' => 'Site content', 'content' => base64_encode($json), 'sha' => $sha,
-        ]));
+        foreach (['resources/content.json', 'content.json', 'public/content.json', 'web/content.json', 'assets/content.json'] as $path) {
+            $url = "https://api.github.com/repos/{$c['github_owner']}/{$repo}/contents/{$path}";
+            $get = Http::withToken($c['github_token'])->get($url);
+            if (! $get->successful()) {
+                continue;
+            }
+            $json = json_encode($content, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            Http::withToken($c['github_token'])->put($url, [
+                'message' => 'Site content', 'content' => base64_encode($json), 'sha' => $get->json('sha'),
+            ]);
+
+            return;
+        }
     }
 
-    private function createApp(array $c, string $name): ?string
+    private function createApp(array $c, string $name, string $port): array
     {
         $r = Http::withToken($c['coolify_token'])->timeout(60)->post($c['coolify_url'].'/applications/public', [
             'project_uuid' => $c['coolify_project'], 'server_uuid' => $c['coolify_server'], 'environment_name' => 'production',
             'git_repository' => "https://github.com/{$c['github_owner']}/{$name}", 'git_branch' => 'main',
-            'build_pack' => 'dockerfile', 'ports_exposes' => '8080', 'name' => $name, 'instant_deploy' => true,
+            'build_pack' => 'dockerfile', 'ports_exposes' => $port, 'name' => $name, 'instant_deploy' => false,
         ]);
         if (! $r->successful()) {
             Log::warning('Coolify app create failed', ['status' => $r->status(), 'body' => mb_substr($r->body(), 0, 200)]);
 
-            return null;
+            return [null, null];
         }
         $d = $r->json('domains');
 
-        return is_array($d) ? ($d[0] ?? null) : $d;
+        return [$r->json('uuid'), is_array($d) ? ($d[0] ?? null) : $d];
     }
 
-    private function waitLive(string $url): bool
+    private function triggerDeploy(array $c, string $uuid): ?string
     {
-        for ($i = 0; $i < 22; $i++) {
-            try {
-                if (Http::timeout(8)->get($url)->successful()) {
-                    return true;
-                }
-            } catch (\Throwable $e) {
-                // still building
+        return Http::withToken($c['coolify_token'])->timeout(40)
+            ->get($c['coolify_url'].'/deploy', ['uuid' => $uuid, 'force' => true])
+            ->json('deployments.0.deployment_uuid');
+    }
+
+    private function waitBuild(array $c, ?string $depUuid): bool
+    {
+        if (! $depUuid) {
+            return false;
+        }
+        for ($i = 0; $i < 45; $i++) {
+            $status = Http::withToken($c['coolify_token'])->timeout(20)
+                ->get($c['coolify_url']."/deployments/{$depUuid}")->json('status');
+            if ($status === 'finished') {
+                return true;
+            }
+            if (in_array($status, ['failed', 'error', 'cancelled'], true)) {
+                return false;
             }
             sleep(9);
         }
 
         return false;
+    }
+
+    private function fetchLogs(array $c, ?string $depUuid): string
+    {
+        if (! $depUuid) {
+            return '';
+        }
+        $logs = Http::withToken($c['coolify_token'])->timeout(20)
+            ->get($c['coolify_url']."/deployments/{$depUuid}")->json('logs');
+
+        return is_string($logs) ? $logs : (string) json_encode($logs);
+    }
+
+    /**
+     * Best-effort recovery between attempts. Templates are pre-hardened, so most
+     * failures are transient (a plain retry fixes them). Known log patterns can be
+     * patched on the per-client repo here as they're discovered.
+     */
+    private function autoFix(array $c, string $repo, array $stack, string $logs, string $reason): void
+    {
+        // Reserved for known per-repo fixes keyed off $logs; retry covers transient failures.
+    }
+
+    private function fail(Project $project, string $why): ?string
+    {
+        $project->update(['status' => ProjectStatus::Review]);
+        Log::error('Autodeploy failed', ['project' => $project->id, 'why' => $why]);
+
+        return null;
     }
 
     private function extractJson(?string $s): ?string

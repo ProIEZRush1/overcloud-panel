@@ -38,15 +38,25 @@ return [
         'enabled' => (bool) env('DEVBUSINESS_SYNC', true),
     ],
 
-    // Autonomous build + deploy of the client's Laravel+Vue site after payment.
+    // Autonomous build + deploy of the client's site/app after payment.
     'deploy' => [
         'enabled' => (bool) env('AUTODEPLOY_ENABLED', false),
         'github_token' => env('GITHUB_TOKEN'),
         'github_owner' => env('GITHUB_OWNER', 'ProIEZRush1'),
-        'template_repo' => env('TEMPLATE_REPO', 'overcloud-client-template'),
         'coolify_url' => env('COOLIFY_API_URL', 'http://coolify:8080/api/v1'),
         'coolify_token' => env('COOLIFY_API_TOKEN'),
         'coolify_project' => env('COOLIFY_PROJECT_UUID', 'm0gc8swgwcoookso8cowwc8s'),
         'coolify_server' => env('COOLIFY_SERVER_UUID', 'nwo4k04sswwos08wckkcg84s'),
+        'max_attempts' => (int) env('AUTODEPLOY_MAX_ATTEMPTS', 5),
+        'default_stack' => env('DEFAULT_STACK', 'laravel-vue'),
+
+        // Available stacks. `kind`: web|app. `markers`: strings the live page must
+        // contain to pass E2E (apps render to canvas, so they check the bootstrap).
+        'stacks' => [
+            'laravel-vue' => ['repo' => 'overcloud-client-template', 'port' => '8080', 'label' => 'Laravel + Vue', 'kind' => 'web', 'markers' => ['Overcloud']],
+            'nextjs' => ['repo' => 'overcloud-nextjs-template', 'port' => '3000', 'label' => 'Next.js', 'kind' => 'web', 'markers' => ['Overcloud']],
+            'static' => ['repo' => 'overcloud-static-template', 'port' => '80', 'label' => 'HTML estático', 'kind' => 'web', 'markers' => ['Overcloud']],
+            'flutter' => ['repo' => 'overcloud-flutter-template', 'port' => '80', 'label' => 'Flutter Web', 'kind' => 'app', 'markers' => ['flutter_bootstrap.js', 'main.dart.js']],
+        ],
     ],
 ];
