@@ -369,6 +369,49 @@ class DeployService
         }
     }
 
+    /** Apply a client-requested change: clone -> Claude edits -> push -> redeploy -> verify. */
+    public function applyChange(Project $project, string $instruction): bool
+    {
+        if (! $this->isConfigured() || ! $project->repo_url || ! $project->coolify_app_uuid) {
+            return false;
+        }
+        $c = config('overcloud.deploy');
+        $name = basename($project->repo_url);
+        $dir = storage_path('builds/'.$name.'-chg-'.Str::lower(Str::random(4)));
+
+        if (! $this->cloneRepo($c, $name, $dir)
+            || ! $this->agent->isAvailable()
+            || ! $this->agent->change($project, $dir, $instruction)
+            || ! $this->pushDir($c, $dir, $name)) {
+            return false;
+        }
+
+        $stackKey = ((array) ($project->brief ?? []))['stack'] ?? $c['default_stack'];
+        $stack = $c['stacks'][$stackKey] ?? $c['stacks'][$c['default_stack']];
+        $content = ['business' => (string) ($project->lead?->company ?? '')];
+        for ($i = 1; $i <= 3; $i++) {
+            $dep = $this->triggerDeploy($c, $project->coolify_app_uuid);
+            if ($this->waitForLive($c, $dep, $project->prod_url, $content, $stack)['ok']) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function cloneRepo(array $c, string $name, string $dir): bool
+    {
+        $remote = "https://x-access-token:{$c['github_token']}@github.com/{$c['github_owner']}/{$name}.git";
+        try {
+            return Process::timeout(150)->run(['bash', '-lc',
+                'rm -rf '.escapeshellarg($dir).' && git clone -q '.escapeshellarg($remote).' '.escapeshellarg($dir)])->successful();
+        } catch (\Throwable $e) {
+            Log::warning('cloneRepo failed', ['e' => $e->getMessage()]);
+
+            return false;
+        }
+    }
+
     /** Best-effort progress message to the client's DM during the build/deploy. */
     private function notify(Project $project, string $message): void
     {

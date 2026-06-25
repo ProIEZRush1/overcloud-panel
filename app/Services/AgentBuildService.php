@@ -36,6 +36,16 @@ class AgentBuildService
         return $this->run($project, $dir, $this->repairPrompt($stack, $logs));
     }
 
+    /** Apply a client-requested change to an existing project checkout. */
+    public function change(Project $project, string $dir, string $instruction): bool
+    {
+        $prompt = 'Aplica este cambio solicitado por el cliente al proyecto que está en el directorio actual: "'.$instruction.'". '
+            .'Conserva el resto del sitio funcionando, mantén el footer "Desarrollado por Overcloud", el Dockerfile y la configuración de despliegue. '
+            .'Si el cambio afecta los assets (CSS/JS), reconstrúyelos para que queden horneados. NO hagas git push ni despliegues; solo edita los archivos.';
+
+        return $this->run($project, $dir, $prompt);
+    }
+
     private function run(Project $project, string $dir, string $prompt): bool
     {
         File::ensureDirectoryExists($dir);

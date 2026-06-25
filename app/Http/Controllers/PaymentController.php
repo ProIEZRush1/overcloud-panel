@@ -4,9 +4,13 @@ namespace App\Http\Controllers;
 
 use App\Enums\PaymentStatus;
 use App\Models\PaymentRequest;
+use App\Services\BotResponder;
+use App\Services\CrmSync;
 use App\Services\PaymentService;
+use App\Services\ProjectService;
+use App\Services\WhatsAppGateway;
+use App\Support\Money;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
 
 class PaymentController extends Controller
@@ -20,7 +24,7 @@ class PaymentController extends Controller
                 'id' => $p->id,
                 'lead' => ['uuid' => $p->lead?->uuid, 'name' => $p->lead?->name ?? $p->lead?->phone],
                 'type' => $p->type->value, 'type_label' => $p->type->label(),
-                'amount' => \App\Support\Money::format($p->amount_cents, $p->currency),
+                'amount' => Money::format($p->amount_cents, $p->currency),
                 'status' => $p->status->value, 'status_label' => $p->status->label(),
                 'reference' => $p->reference,
                 'proof_url' => $p->latestProof ? route('files.proof', $p->latestProof) : null,
@@ -39,7 +43,7 @@ class PaymentController extends Controller
         $service->verify($payment, $request->user()->id);
 
         try {
-            app(\App\Services\CrmSync::class)->syncPaymentVerified($payment);
+            app(CrmSync::class)->syncPaymentVerified($payment);
         } catch (\Throwable $e) {
             report($e);
         }
@@ -48,18 +52,18 @@ class PaymentController extends Controller
         // tell the client in their chat that we're starting.
         try {
             if ($payment->quote) {
-                $project = app(\App\Services\ProjectService::class)->provisionFromQuote($payment->quote);
-                $conv = $payment->lead?->conversations()->where('is_group', false)->first();
-                if ($conv && $conv->whatsappAccount) {
-                    $msg = $project->whatsapp_group_jid
-                        ? '¡Tu pago quedó verificado! ✅ Creé tu *grupo de proyecto* — ahí seguimos y arrancamos. 🚀'
-                        : '¡Tu pago quedó verificado! ✅ Ya arrancamos con tu proyecto; cualquier cambio o duda, por aquí. 🚀';
-                    app(\App\Services\WhatsAppGateway::class)->sendText($conv->whatsappAccount->session_name, $conv->contact_jid, $msg);
-                }
+                $project = app(ProjectService::class)->provisionFromQuote($payment->quote);
 
-                // Autonomously build + deploy the client's site (queued).
+                // Don't build yet: the bot first asks the client for everything it needs
+                // (content, photos, accesses, or "do it all for me"), then triggers the build.
                 if (config('overcloud.deploy.enabled')) {
-                    \App\Jobs\DeployProject::dispatch($project->id)->onQueue('deploy');
+                    app(BotResponder::class)->startGathering($project);
+                } else {
+                    $conv = $payment->lead?->conversations()->where('is_group', false)->first();
+                    if ($conv && $conv->whatsappAccount) {
+                        app(WhatsAppGateway::class)->sendText($conv->whatsappAccount->session_name, $conv->contact_jid,
+                            '¡Tu pago quedó verificado! ✅ Ya arrancamos con tu proyecto; cualquier cambio o duda, por aquí. 🚀');
+                    }
                 }
             }
         } catch (\Throwable $e) {

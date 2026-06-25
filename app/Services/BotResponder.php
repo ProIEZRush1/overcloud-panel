@@ -8,11 +8,15 @@ use App\Enums\MessageDirection;
 use App\Enums\MessageStatus;
 use App\Enums\MessageType;
 use App\Enums\QuoteStatus;
+use App\Jobs\ApplyChange;
+use App\Jobs\DeployProject;
 use App\Models\Conversation;
 use App\Models\Lead;
 use App\Models\Message;
+use App\Models\Project;
 use App\Models\Service;
 use App\Models\ServiceFeature;
+use App\Models\Spec;
 use App\Support\Money;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -64,6 +68,8 @@ class BotResponder
             LeadStage::Spec => $this->onScope($conversation, $lead, $text),
             LeadStage::Quoted, LeadStage::Negotiating => $this->onQuoted($conversation, $lead, $text),
             LeadStage::Accepted, LeadStage::AwaitingPayment => $this->onAwaitingPayment($conversation, $lead, $isMedia),
+            LeadStage::Paid => $this->onGathering($conversation, $lead, $inbound, $text),
+            LeadStage::InProduction, LeadStage::Delivered, LeadStage::Maintenance => $this->onProduction($conversation, $lead, $text),
             default => $this->send($conversation, $this->claudeOr($conversation,
                 'Tu proyecto ya está en marcha ✅ Cualquier cambio o duda lo vemos por aquí o en tu grupo. 🙌')),
         };
@@ -116,6 +122,76 @@ class BotResponder
 
         return $this->send($conversation,
             'Quedo al pendiente de tu *comprobante* (foto o PDF) para verificar el anticipo y arrancar. 🙌');
+    }
+
+    /** Public: after payment, ask the client for everything we need to build (Overcloud-branded). */
+    public function startGathering(Project $project): void
+    {
+        $conversation = Conversation::where('lead_id', $project->lead_id)->where('is_group', false)->first();
+        if (! $conversation) {
+            return;
+        }
+        $fallback = '¡Tu pago quedó verificado! ✅ Para construir tu proyecto necesito un par de cosas: el contenido y las fotos que quieras incluir, '
+            .'los datos de tu negocio, y los accesos que apliquen (por ejemplo, para cobrar pagos en línea). '
+            .'¿Me los pasas por aquí, te doy instrucciones, o prefieres que *yo me encargue de todo*? 🙌';
+        $message = $fallback;
+        if ($this->assistant->isEnabled()) {
+            $spec = Spec::where('lead_id', $project->lead_id)->latest()->first();
+            $feats = collect($spec?->content['features'] ?? [])->map(fn ($f) => is_array($f) ? ($f['name'] ?? '') : $f)->filter()->implode(', ');
+            $prompt = 'Eres el asistente de Overcloud, una agencia que construye sitios y aplicaciones. Acabamos de recibir el pago del cliente. '
+                .'Escribe UN mensaje de WhatsApp, cálido y profesional, pidiéndole TODO lo que necesitas de él para construir su proyecto: contenido y textos, '
+                .'fotos/logo, datos del negocio, y accesos o llaves si aplica (por ejemplo pasarela de pagos o servicios externos). '
+                .'Ofrécele claramente 3 opciones: que te los pase, que le des instrucciones paso a paso, o que TÚ te encargas de todo por él. '
+                .'NUNCA menciones herramientas internas ni proveedores de IA. Habla como Overcloud. En español, breve. '
+                .'Proyecto: '.($spec?->title ?? 'su proyecto').'. Funciones: '.$feats.'.';
+            $message = $this->assistant->complete($prompt) ?: $fallback;
+        }
+        $this->send($conversation, $message);
+    }
+
+    /** Gathering: collect what the client shares; build when they say go / "do it all". */
+    private function onGathering(Conversation $conversation, Lead $lead, Message $inbound, string $text): ?Message
+    {
+        $project = Project::where('lead_id', $lead->id)->latest()->first();
+        if (! $project) {
+            return $this->send($conversation, 'Dame un momentito, estoy preparando todo para arrancar. 🙌');
+        }
+
+        $brief = (array) ($project->brief ?? []);
+        if (filled($inbound->body)) {
+            $brief['requirements'][] = $inbound->body;
+        }
+
+        $all = $this->wantsAll($text);
+        if ($all || $this->isYes($text)) {
+            $brief['handle_all'] = $all;
+            $project->update(['brief' => $brief]);
+            $lead->update(['stage' => LeadStage::InProduction]);
+            DeployProject::dispatch($project->id)->onQueue('deploy');
+
+            return $this->send($conversation, $all
+                ? '¡Perfecto! 🙌 Yo me encargo de *todo* — contenido, accesos y configuración. Empiezo a construirlo y te voy avisando del avance por aquí. 🛠️'
+                : '¡Excelente! 🙌 Con eso arranco. Empiezo a construir tu proyecto y te voy contando el avance. 🛠️');
+        }
+
+        $project->update(['brief' => $brief]);
+
+        return $this->send($conversation, $this->claudeOr($conversation,
+            '¡Gracias, lo anoto! 🙌 ¿Hay algo más que quieras incluir o *arrancamos*? Si prefieres, también me puedo encargar yo de todo — solo dime.'));
+    }
+
+    /** After delivery: apply change requests, otherwise stay available. */
+    private function onProduction(Conversation $conversation, Lead $lead, string $text): ?Message
+    {
+        $project = Project::where('lead_id', $lead->id)->latest()->first();
+        if ($project && $project->repo_url && $project->coolify_app_uuid && $this->looksLikeChange($text)) {
+            ApplyChange::dispatch($project->id, $text)->onQueue('deploy');
+
+            return $this->send($conversation, '¡Claro! 🙌 Aplico ese cambio en tu sitio y te aviso en cuanto quede actualizado. 🔧');
+        }
+
+        return $this->send($conversation, $this->claudeOr($conversation,
+            'Tu proyecto ya está en línea ✅ Si quieres algún ajuste o cambio, descríbemelo y lo aplico. 🙌'));
     }
 
     /** Scope stage: wait for the client to confirm the alcance before quoting. */
@@ -243,6 +319,18 @@ class BotResponder
     private function isYes(string $text): bool
     {
         return Str::contains($text, ['aprob', 'aprueb', 'acept', 'adelante', 'dale', 'sí', 'si,', 'claro', 'ok', 'okay', 'perfecto', 'me late', 'procede', 'de acuerdo', 'va pues', 'hágale', 'hagale', 'confirm']);
+    }
+
+    /** Client wants us to handle everything ("hazlo tú", "encárgate de todo"). */
+    private function wantsAll(string $text): bool
+    {
+        return Str::contains($text, ['hazlo tú', 'hazlo tu', 'hazlo todo', 'haz todo', 'encárgate', 'encargate', 'tú te encargas', 'tu te encargas', 'de todo', 'tú hazlo', 'tu hazlo', 'has todo', 'encargate de todo', 'me encargo no', 'hazlo por mí', 'hazlo por mi']);
+    }
+
+    /** Heuristic: the client is describing a change to the delivered site. */
+    private function looksLikeChange(string $text): bool
+    {
+        return Str::contains($text, ['cambi', 'cámbi', 'agrega', 'añade', 'anade', 'quita', 'pon ', 'ponle', 'modific', 'color', 'logo', 'texto', 'precio', 'producto', 'foto', 'imagen', 'ajusta', 'mueve', 'actualiza', 'reemplaza', 'más grande', 'mas grande', 'más chico']);
     }
 
     private function detectService($lead, string $text): void

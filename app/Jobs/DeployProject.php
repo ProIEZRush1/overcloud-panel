@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Enums\LeadStage;
 use App\Models\Project;
 use App\Services\DeployService;
 use App\Services\WhatsAppGateway;
@@ -51,9 +52,12 @@ class DeployProject implements ShouldQueue
             return;
         }
 
+        // Delivered: subsequent client messages route to change-handling.
+        $project->lead?->update(['stage' => LeadStage::Delivered]);
+
         if ($conv && $account) {
             $gateway->sendText($account->session_name, $conv->contact_jid,
-                "¡Buenas noticias! 🚀 Tu sitio ya está en línea:\n{$url}\n\nRevísalo y cualquier ajuste me dices por aquí. 🙌");
+                "¡Buenas noticias! 🚀 Tu sitio ya está en línea:\n{$url}\n\nRevísalo y, si quieres cualquier cambio, descríbemelo por aquí y lo aplico. 🙌");
         }
         if ($project->whatsapp_group_jid && $account) {
             try {
