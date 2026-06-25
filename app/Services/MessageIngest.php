@@ -51,8 +51,7 @@ class MessageIngest
         $type = MessageType::tryFrom($data['type'] ?? 'text') ?? MessageType::Text;
         $mediaPath = $this->storeMedia($account->session_name, $data);
 
-        $message = $conversation->messages()->create([
-            'wa_message_id' => $data['wa_message_id'] ?? null,
+        $attrs = [
             'direction' => $fromMe ? MessageDirection::Out : MessageDirection::In,
             'type' => $type,
             'sender_jid' => $data['sender_jid'] ?? null,
@@ -64,7 +63,16 @@ class MessageIngest
             'status' => MessageStatus::Delivered,
             'is_from_me' => $fromMe,
             'wa_timestamp' => isset($data['timestamp']) ? Carbon::createFromTimestamp($data['timestamp']) : now(),
-        ]);
+        ];
+        $waId = $data['wa_message_id'] ?? null;
+
+        // Dedup duplicate webhooks: the same wa_message_id must yield ONE row (and one reply).
+        $message = $waId
+            ? $conversation->messages()->firstOrCreate(['wa_message_id' => $waId], $attrs)
+            : $conversation->messages()->create($attrs + ['wa_message_id' => null]);
+        if (! $message->wasRecentlyCreated) {
+            return $message; // already ingested → skip preview/unread/lead/proof and re-reply
+        }
 
         $preview = $data['text'] ?? $data['caption'] ?? '['.$type->value.']';
         $conversation->forceFill([

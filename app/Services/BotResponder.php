@@ -162,6 +162,10 @@ class BotResponder
         $text = preg_replace('/^\s*(aquí (tienes|está|va)\b[^\n:]*:?|claro[,!]?\s*aquí\b[^\n:]*:?)\s*\n+/iu', '', $text);
         $text = preg_replace('/^\s*-{3,}\s*\n+/', '', (string) $text);
         $text = preg_replace('/\n+\s*-{3,}\s*$/', '', (string) $text);
+        // WhatsApp bold is a SINGLE asterisk — collapse Markdown's ** (and ###/__) to WhatsApp style.
+        $text = preg_replace('/\*{2,}/', '*', (string) $text);
+        $text = preg_replace('/^#{1,6}\s*/m', '', (string) $text);
+        $text = preg_replace('/__([^_]+)__/', '*$1*', (string) $text);
 
         return trim((string) $text, " \t\n\r\"");
     }

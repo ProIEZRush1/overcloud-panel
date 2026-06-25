@@ -11,6 +11,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * Generates and sends the AI reply for an inbound message. Runs on the queue so
@@ -32,6 +33,11 @@ class GenerateBotReply implements ShouldQueue
 
     public function handle(BotResponder $responder, TranscriptionService $transcriber, VisionService $vision): void
     {
+        // Reply to each inbound at most once, even if the job is dispatched/retried twice.
+        if (! Cache::add('bot-replied:'.$this->messageId, 1, now()->addMinutes(15))) {
+            return;
+        }
+
         $message = Message::with('conversation.whatsappAccount', 'conversation.lead')->find($this->messageId);
 
         if ($message) {
