@@ -217,12 +217,15 @@ class DeployService
     private function waitForLive(array $c, ?string $depUuid, string $url, array $content, array $stack): array
     {
         $last = ['ok' => false, 'reason' => 'sin respuesta'];
-        for ($i = 0; $i < 45; $i++) {
+        // ~8 min: a proxied Cloudflare subdomain's first Let's Encrypt cert can take several
+        // minutes to serve 200, so be patient before giving up (the client never sees this).
+        for ($i = 0; $i < 60; $i++) {
             $last = $this->verify($url, $content, $stack);
             if ($last['ok']) {
                 return $last;
             }
-            if ($depUuid) {
+            // Only fail-fast on a real build failure, and only after giving the cert time to settle.
+            if ($depUuid && $i >= 8) {
                 $status = Http::withToken($c['coolify_token'])->timeout(15)
                     ->get($c['coolify_url']."/deployments/{$depUuid}")->json('status');
                 if (in_array($status, ['failed', 'error', 'cancelled'], true)) {
