@@ -40,7 +40,8 @@ class TestScenarios extends Command
 
         $cases = [
             ['saludo_sin_precio', LeadStage::New, false, ['Hola, quiero una tienda en línea para vender ropa'],
-                fn (?Message $r, Lead $l) => [$r && ! preg_match('/\$\d|precio|cotiz/i', (string) $r->body), 'el saludo no menciona precio/cotización']],
+                // "precios accesibles" (marketing) is fine; flag only a real amount or pushing a quote.
+                fn (?Message $r, Lead $l) => [$r && ! preg_match('/\$\s?\d|cuesta|precio de|cotiza[rt]/i', (string) $r->body), 'el saludo no pone precio ni empuja cotización']],
             ['si_procede_alcance', LeadStage::Qualifying, true, ['Sí, va'],
                 fn (?Message $r, Lead $l) => [$l->specs()->exists(), 'un "sí" genera el alcance (no pide keyword)']],
             ['cotizacion_literal', LeadStage::Qualifying, true, ['cotización'],
