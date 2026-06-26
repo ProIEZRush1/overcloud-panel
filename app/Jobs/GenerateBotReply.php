@@ -56,6 +56,22 @@ class GenerateBotReply implements ShouldQueue
         // Make the message readable: voice notes → text, images → description.
         $transcriber->transcribe($message);
         $vision->describe($message);
+        $message->refresh();
+
+        // If transcription/vision failed and there's still no text, fall back to the caption
+        // or a sensible placeholder so the bot still engages instead of choking on an empty body.
+        if (blank($message->body)) {
+            $fallback = filled($message->caption)
+                ? $message->caption
+                : match ($message->type->value) {
+                    'image' => '[el cliente envió una imagen]',
+                    'audio' => '[el cliente envió un audio]',
+                    'document' => '[el cliente envió un documento]',
+                    default => '[el cliente envió un mensaje]',
+                };
+            $message->update(['body' => $fallback]);
+        }
+
         $responder->handle($message->conversation, $message->fresh());
     }
 }

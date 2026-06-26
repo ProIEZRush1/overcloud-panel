@@ -71,7 +71,15 @@ class DeployService
             $this->updateContent($c, $name, $content);
         }
 
-        [$uuid, $url] = $this->createApp($c, $name, $stack['port']);
+        // Reuse the project's existing Coolify app on a retry instead of creating a duplicate.
+        if ($project->coolify_app_uuid) {
+            $uuid = $project->coolify_app_uuid;
+            $url = $project->prod_url ?: '';
+        } else {
+            $slug = Str::slug($project->lead?->company ?: $project->lead?->name ?: 'sitio');
+            $this->removeStaleApps($c, $slug.'-', $name);
+            [$uuid, $url] = $this->createApp($c, $name, $stack['port']);
+        }
         if (! $uuid) {
             return $this->fail($project, 'no se pudo crear la app en Coolify');
         }
@@ -132,7 +140,8 @@ class DeployService
             return null;
         }
         $c = config('overcloud.deploy');
-        $name = Str::slug(($lead->company ?: $lead->name ?: 'sitio')).'-demo-'.Str::lower(Str::random(4));
+        $slug = Str::slug($lead->company ?: $lead->name ?: 'sitio');
+        $name = $slug.'-demo-'.Str::lower(Str::random(4));
         $dir = storage_path('builds/'.$name);
 
         if (! $this->agent->buildDemo($lead, $dir)
@@ -140,6 +149,10 @@ class DeployService
             || ! $this->pushDir($c, $dir, $name)) {
             return null;
         }
+
+        // Remove any previous demo app(s) for this client so the demo domain never collides
+        // (re-running a demo used to leave stale apps fighting over <slug>-demo.overcloud.us).
+        $this->removeStaleApps($c, $slug.'-demo-', $name);
 
         [$uuid, $url] = $this->createApp($c, $name, '8080');
         if (! $uuid) {
@@ -397,6 +410,29 @@ class DeployService
         }
 
         return $this->createDns($c, $subdomain) ? $subdomain.'.'.$c['base_domain'] : null;
+    }
+
+    /** Delete leftover Coolify apps whose name starts with $prefix (except $keep) to avoid domain collisions. */
+    private function removeStaleApps(array $c, string $prefix, string $keep): void
+    {
+        try {
+            $apps = Http::withToken($c['coolify_token'])->timeout(20)
+                ->get($c['coolify_url'].'/applications')->json();
+            if (! is_array($apps)) {
+                return;
+            }
+            foreach ($apps as $a) {
+                $n = $a['name'] ?? '';
+                $uuid = $a['uuid'] ?? null;
+                if ($uuid && $n !== $keep && Str::startsWith($n, $prefix)) {
+                    Http::withToken($c['coolify_token'])->timeout(25)
+                        ->delete($c['coolify_url']."/applications/{$uuid}", ['delete_volumes' => true, 'delete_configurations' => true]);
+                    Log::info('removed stale app', ['name' => $n]);
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning('removeStaleApps failed', ['e' => $e->getMessage()]);
+        }
     }
 
     private function createDns(array $c, string $sub): bool
