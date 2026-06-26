@@ -43,7 +43,7 @@ class MonitorConversations extends Command
                     if ($conv->ai_enabled) {
                         $conv->update(['ai_enabled' => false]);
                     }
-                    $this->alert($gateway, $owner, $conv, '🔁 Bucle de mensajes repetidos — pausé el bot en esta conversación', $alerts);
+                    $this->notifyOwner($gateway, $owner, $conv, '🔁 Bucle de mensajes repetidos — pausé el bot en esta conversación', $alerts);
 
                     return;
                 }
@@ -53,7 +53,7 @@ class MonitorConversations extends Command
                 if ($last->direction === MessageDirection::In
                     && $last->created_at->lt(now()->subMinutes(self::STUCK_MINUTES))
                     && $conv->ai_enabled) {
-                    $this->alert($gateway, $owner, $conv, '⏳ Cliente esperando respuesta hace '.self::STUCK_MINUTES.'+ min', $alerts);
+                    $this->notifyOwner($gateway, $owner, $conv, '⏳ Cliente esperando respuesta hace '.self::STUCK_MINUTES.'+ min', $alerts);
                 }
             });
 
@@ -62,7 +62,7 @@ class MonitorConversations extends Command
         return self::SUCCESS;
     }
 
-    private function alert(WhatsAppGateway $gateway, string $owner, Conversation $conv, string $reason, int &$alerts): void
+    private function notifyOwner(WhatsAppGateway $gateway, string $owner, Conversation $conv, string $reason, int &$alerts): void
     {
         // Don't spam the owner: one alert per conversation+reason per hour.
         $key = 'mon-alert:'.$conv->id.':'.md5($reason);
