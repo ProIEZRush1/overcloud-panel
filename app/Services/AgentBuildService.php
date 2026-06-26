@@ -69,11 +69,14 @@ class AgentBuildService
         $features = collect($spec?->content['features'] ?? [])
             ->map(fn ($f) => is_array($f) ? trim(($f['name'] ?? '').(! empty($f['desc']) ? ' — '.$f['desc'] : '')) : $f)
             ->filter()->implode("\n- ");
+        // Adjustments the client asked for during scope/demo — must be reflected in the build.
+        $feedback = collect($spec?->content['feedback'] ?? [])->filter()->implode("\n- ");
 
         return [
             'business' => $lead?->company ?: ($lead?->name ?: 'el negocio'),
             'need' => $lead?->summary ?: 'sitio profesional a la medida',
             'features' => $features !== '' ? $features : 'sitio profesional a la medida',
+            'feedback' => $feedback,
             'mode' => $mode,
         ];
     }
@@ -111,6 +114,9 @@ class AgentBuildService
     private function writeContext(string $dir, array $ctx): void
     {
         $isChange = $ctx['mode'] === 'change';
+        $feedbackBlock = ! empty($ctx['feedback'])
+            ? "\n## Ajustes que pidió el cliente (OBLIGATORIO reflejarlos)\n- {$ctx['feedback']}\n"
+            : '';
         $verifyStep = $isChange
             ? '4. EL CAMBIO: ya exploraste y editaste — ahora CONFIRMA con curl/grep que el valor NUEVO aparece en el HTML/CSS servido (no el viejo). Si no aparece, corrígelo y vuelve a verificar.'
             : '4. Revisa que no haya enlaces rotos, secciones vacías, imágenes que no cargan ni errores en consola. El contenido debe ser realista y del giro.';
@@ -125,7 +131,7 @@ class AgentBuildService
         - **Necesidad:** {$ctx['need']}
         - **Funciones del alcance:**
         - {$ctx['features']}
-
+        {$feedbackBlock}
         ## Reglas de marca (OBLIGATORIO)
         - Footer en TODAS las páginas: "Desarrollado por Overcloud" donde *Overcloud* enlaza a https://wa.me/5215594356241, y un "¿Quieres tu sitio? Escríbenos por WhatsApp" al mismo enlace.
         - NUNCA menciones Claude, IA ni herramientas internas en el contenido del sitio. Todo es de Overcloud.

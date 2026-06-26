@@ -12,6 +12,7 @@ use App\Models\Lead;
 use App\Models\Message;
 use App\Models\PaymentProof;
 use App\Models\WhatsAppAccount;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -67,9 +68,20 @@ class MessageIngest
         $waId = $data['wa_message_id'] ?? null;
 
         // Dedup duplicate webhooks: the same wa_message_id must yield ONE row (and one reply).
-        $message = $waId
-            ? $conversation->messages()->firstOrCreate(['wa_message_id' => $waId], $attrs)
-            : $conversation->messages()->create($attrs + ['wa_message_id' => null]);
+        // Backed by a UNIQUE index, so even a concurrent double-POST collapses to one — if we lose
+        // the insert race we fetch the row the other request created and treat it as already ingested.
+        if ($waId) {
+            try {
+                $message = $conversation->messages()->firstOrCreate(['wa_message_id' => $waId], $attrs);
+            } catch (UniqueConstraintViolationException $e) {
+                $message = $conversation->messages()->where('wa_message_id', $waId)->first();
+                if (! $message) {
+                    throw $e;
+                }
+            }
+        } else {
+            $message = $conversation->messages()->create($attrs + ['wa_message_id' => null]);
+        }
         if (! $message->wasRecentlyCreated) {
             return $message; // already ingested → skip preview/unread/lead/proof and re-reply
         }
@@ -120,9 +132,15 @@ class MessageIngest
         if (! $type->couldBeProof() || ! $message->media_path) {
             return;
         }
+        // Attach to the request actually awaiting payment: prefer the latest PENDING one (the deposit
+        // the client is paying now), not whatever request happens to be newest — deposit, milestones
+        // and maintenance can all be open at once and a "latest()" could mark the wrong one paid.
         $request = $lead->paymentRequests()
-            ->whereIn('status', [PaymentStatus::Pending->value, PaymentStatus::ProofSubmitted->value])
-            ->latest()->first();
+            ->where('status', PaymentStatus::Pending->value)
+            ->latest('id')->first()
+            ?? $lead->paymentRequests()
+                ->where('status', PaymentStatus::ProofSubmitted->value)
+                ->latest('id')->first();
         if (! $request) {
             return;
         }

@@ -7,6 +7,7 @@ use App\Enums\LeadStage;
 use App\Enums\MessageDirection;
 use App\Enums\MessageStatus;
 use App\Enums\MessageType;
+use App\Enums\PaymentStatus;
 use App\Enums\QuoteStatus;
 use App\Jobs\ApplyChange;
 use App\Jobs\BuildDemo;
@@ -56,6 +57,16 @@ class BotResponder
         return $this->funnel($conversation, $inbound);
     }
 
+    /** Send a one-off notice to the client (respecting the bot-enabled gate) without running the funnel. */
+    public function notice(Conversation $conversation, string $text): ?Message
+    {
+        if (! $conversation->botMayReply()) {
+            return null;
+        }
+
+        return $this->send($conversation, $text);
+    }
+
     private function funnel(Conversation $conversation, Message $inbound): ?Message
     {
         $lead = $conversation->lead;
@@ -100,7 +111,8 @@ class BotResponder
 
     private function onQualifying(Conversation $conversation, Lead $lead, Message $inbound, string $text): ?Message
     {
-        $this->detectService($lead, $inbound->body ?? '');
+        // Detect the service over the whole burst ("Quiero una tienda" + "en línea" arrive split).
+        $this->detectService($lead, $this->burstText($conversation, $inbound));
         $lead = $lead->fresh();
 
         // An explicit request OR any affirmative ("sí/va/dale") moves us to the scope —
@@ -136,8 +148,18 @@ class BotResponder
         if ($isMedia) {
             $lead->update(['stage' => LeadStage::AwaitingPayment]);
 
-            return $this->send($conversation,
-                '¡Recibí tu comprobante! 🙌 Verifico tu pago y, en cuanto quede aprobado, te creo tu *grupo de proyecto* y arrancamos. 🚀');
+            // Only call it a "comprobante" when there's actually a deposit awaiting proof —
+            // otherwise a logo/photo the client sends gets mis-acknowledged as a payment.
+            $awaitingProof = $lead->paymentRequests()
+                ->whereIn('status', [PaymentStatus::Pending->value, PaymentStatus::ProofSubmitted->value])
+                ->exists();
+            if ($awaitingProof) {
+                return $this->send($conversation,
+                    '¡Recibí tu comprobante! 🙌 Verifico tu pago y, en cuanto quede aprobado, te creo tu *grupo de proyecto* y arrancamos. 🚀');
+            }
+
+            return $this->send($conversation, $this->claudeOr($conversation,
+                '¡Gracias, lo recibí! 🙌 Si es tu *comprobante* del anticipo lo verifico enseguida; si es material para tu proyecto también lo guardo. ¿Me confirmas qué es?'));
         }
 
         if ($this->looksLikePaymentProposal($text)) {
@@ -219,13 +241,17 @@ class BotResponder
             return $this->send($conversation, 'Dame un momentito, estoy preparando todo para arrancar. 🙌');
         }
 
+        // Read the whole burst (the debounce replies once to the latest fragment, but a key/value
+        // can be split across messages — "aquí va mi llave" then "sk_live_…") so nothing is lost.
+        $burst = $this->burstText($conversation, $inbound);
+
         $brief = (array) ($project->brief ?? []);
         if (filled($inbound->body)) {
             $brief['requirements'][] = $inbound->body;
 
             // Capture any API keys/credentials the client shares — injected at deploy time.
-            if ($this->looksLikeSecret($inbound->body)) {
-                $env = $this->extractSecrets($inbound->body);
+            if ($this->looksLikeSecret($burst)) {
+                $env = $this->extractSecrets($burst);
                 if ($env) {
                     $brief['env'] = array_merge((array) ($brief['env'] ?? []), $env);
                     $project->update(['brief' => $brief]);
@@ -236,7 +262,10 @@ class BotResponder
         }
 
         $all = $this->wantsAll($text);
-        if ($all || $this->isYes($text)) {
+        // Only START the real build on a clear go-signal — and NOT while the client is still
+        // saying they'll send material ("te paso las fotos", "ahorita te mando"), which used to
+        // kick off a premature deploy with an incomplete brief (and lose the keys they were about to send).
+        if (($all || $this->readyToBuild($text) || $this->isYes($text)) && ! $this->promisingToSend($text)) {
             $brief['handle_all'] = $all;
             $project->update(['brief' => $brief]);
             $lead->update(['stage' => LeadStage::InProduction]);
@@ -300,6 +329,10 @@ class BotResponder
             return $this->startDemo($conversation, $lead);
         }
 
+        // Persist the requested adjustment onto the spec so the demo + quote actually reflect it
+        // (it used to be acknowledged and then lost, leaving the quote built from the stale scope).
+        $this->captureFeedback($lead, $text);
+
         return $this->send($conversation, $this->claudeOr($conversation,
             'Con gusto ajusto lo que necesites del alcance 🙌 ¿Qué te gustaría cambiar o agregar? En cuanto me confirmes que está a tu gusto, te preparo un *demo* visual.'));
     }
@@ -328,8 +361,46 @@ class BotResponder
             return $this->sendQuote($conversation, $lead);
         }
 
+        // Capture the requested change and, when it's a concrete adjustment, REBUILD the demo so it
+        // actually shows up — instead of only acknowledging it (the old behavior lost the change).
+        $this->captureFeedback($lead, $text);
+        if (config('overcloud.deploy.enabled') && $this->mentionsAdjustment($text)) {
+            BuildDemo::dispatch($lead->id)->onQueue('deploy');
+        }
+
         return $this->send($conversation, $this->claudeOr($conversation,
             '¡Qué bueno que te gusta! 🙌 Cuéntame qué le falta o qué información de tu negocio quieres que agregue, y lo dejo a tu medida en el demo. 🎨'));
+    }
+
+    /** Persist a client's scope/demo change request onto the latest spec so downstream builds + the
+     *  quote reflect it (kept bounded so it can't grow without limit). */
+    private function captureFeedback(Lead $lead, string $text): void
+    {
+        $text = trim($text);
+        if ($text === '' || ! $this->mentionsAdjustment($text)) {
+            return;
+        }
+        $spec = $lead->specs()->latest()->first();
+        if (! $spec) {
+            return;
+        }
+        $content = (array) ($spec->content ?? []);
+        $content['feedback'] = array_values(array_slice(
+            array_merge((array) ($content['feedback'] ?? []), [$text]), -20
+        ));
+        $spec->content = $content;
+        $spec->save();
+    }
+
+    /** The message describes a concrete change/addition to the scope or demo (not just chit-chat). */
+    private function mentionsAdjustment(string $text): bool
+    {
+        return Str::contains($text, [
+            'agreg', 'añad', 'añád', 'cambi', 'cámbi', 'pon', 'quita', 'incluy', 'inclúy', 'súma', 'suma',
+            'falta', 'me gustaría', 'me gustaria', 'quiero que', 'quisiera', 'color', 'logo', 'foto', 'imagen',
+            'sección', 'seccion', 'página', 'pagina', 'menú', 'menu', 'horario', 'dirección', 'direccion',
+            'teléfono', 'telefono', 'whatsapp', 'mapa', 'precio', 'producto',
+        ]);
     }
 
     /** Generate + send ONLY the detailed scope doc; the quote comes after the client OKs it. */
@@ -471,14 +542,47 @@ class BotResponder
         return Str::contains($text, [
             'te falta', 'le falta', 'me falta', 'hace falta', 'falta info', 'faltó', 'faltan', 'falta agregar',
             'agreg', 'añad', 'cambi', 'cámbi', 'modific', 'quítale', 'quitale', 'quisiera que', 'me gustaría que',
-            'podrías', 'puedes agregar', 'puedes poner', 'puedes cambiar', 'antes quiero', 'antes de', 'una duda', 'no me gust',
+            'podrías', 'puedes agregar', 'puedes poner', 'puedes cambiar', 'antes quiero', 'antes de pagar',
+            'antes de avanzar', 'antes de seguir', 'antes de continuar', 'antes de aprobar', 'antes de arrancar',
+            'una duda', 'no me gust',
         ]);
     }
 
     /** Client wants us to handle everything ("hazlo tú", "encárgate de todo"). */
     private function wantsAll(string $text): bool
     {
-        return Str::contains($text, ['hazlo tú', 'hazlo tu', 'hazlo todo', 'haz todo', 'encárgate', 'encargate', 'tú te encargas', 'tu te encargas', 'de todo', 'tú hazlo', 'tu hazlo', 'has todo', 'encargate de todo', 'me encargo no', 'hazlo por mí', 'hazlo por mi']);
+        // NB: no bare 'de todo' — it matched "te paso fotos de todo el negocio" and triggered a build.
+        return Str::contains($text, ['hazlo tú', 'hazlo tu', 'hazlo todo', 'haz todo', 'encárgate de todo', 'encargate de todo', 'encárgate tú', 'tú te encargas', 'tu te encargas', 'tú hazlo', 'tu hazlo', 'has todo', 'hazlo por mí', 'hazlo por mi']);
+    }
+
+    /** An explicit "build it now" go-signal (distinct from a polite "ok"/"perfecto"). */
+    private function readyToBuild(string $text): bool
+    {
+        return Str::contains($text, ['arranca', 'arráncalo', 'arrancalo', 'empieza ya', 'empiézalo', 'empiezalo', 'comiénzalo', 'comienzalo', 'constrúyelo', 'construyelo', 'constrúyela', 'construyela', 'hazlo ya', 'ya está todo', 'ya quedó todo', 'manos a la obra', 'a darle']);
+    }
+
+    /** The client is still about to SEND material ("te paso las fotos", "ahorita te mando") — don't
+     *  start the build yet or we ship with an incomplete brief / lose the keys they're sending. */
+    private function promisingToSend(string $text): bool
+    {
+        return (bool) preg_match('/\b(te\s+(mando|paso|env[ií]o|comparto|manda)|voy\s+a\s+(mandar|enviar|pasar|subir)|ahorita\s+te|al\s+rato\s+te|en\s+un\s+momento\s+te|d[eé]jame\s+(busc|junt|prepar|reun)|estoy\s+(juntando|reuniendo|preparando)|junto\s+(la|los|las))/u', $text);
+    }
+
+    /** Concatenate the client's current burst (messages since our last reply) so per-message
+     *  extractors (service detection, secret capture) see fragments that were split across bubbles. */
+    private function burstText(Conversation $conversation, Message $inbound): string
+    {
+        $lastOut = $conversation->messages()->where('is_from_me', true)->latest()->first();
+        $q = $conversation->messages()->where('is_from_me', false);
+        if ($lastOut) {
+            $q->where('id', '>', $lastOut->id);
+        }
+        $bodies = $q->orderBy('id')->limit(10)->pluck('body')->filter()->all();
+        if (filled($inbound->body) && ! in_array($inbound->body, $bodies, true)) {
+            $bodies[] = $inbound->body;
+        }
+
+        return trim(implode("\n", $bodies));
     }
 
     /** Heuristic: the client is describing a change to the delivered site (a command, not a
@@ -514,7 +618,7 @@ class BotResponder
         return Str::contains($text, [
             'pago único', 'pago unico', 'sin mensualidad', 'sin pagar mensualidad', 'una sola exhibición', 'una exhibicion',
             'puedo pagar', 'podría pagar', 'pagar todo', 'en vez de pagar', 'otra forma de pago', 'descuento', 'rebaja',
-            'a meses', 'en partes diferente', 'me das un', 'precio especial', 'no me alcanza', 'más barato', 'mas barato',
+            'a meses', 'en partes diferente', 'mejor precio', 'precio especial', 'no me alcanza', 'más barato', 'mas barato',
         ]);
     }
 
@@ -658,10 +762,16 @@ class BotResponder
 
     private function send(Conversation $conversation, string $text): Message
     {
-        // Permanent anti-spam guard: never send the client the SAME message twice in a row.
+        // Anti-spam guard: don't send the SAME message twice in a row — but ONLY if the client
+        // hasn't written since. A new client message deserves a reply even if (e.g. with Claude
+        // down) it maps to the same deterministic fallback; otherwise the client gets total silence.
         $lastBot = $conversation->messages()->where('is_from_me', true)->latest()->first();
         if ($lastBot && trim((string) $lastBot->body) === trim($text)) {
-            return $lastBot;
+            $clientWroteSince = $conversation->messages()->where('is_from_me', false)
+                ->where('id', '>', $lastBot->id)->exists();
+            if (! $clientWroteSince) {
+                return $lastBot;
+            }
         }
 
         $out = $conversation->messages()->create([

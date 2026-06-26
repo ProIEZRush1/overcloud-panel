@@ -13,3 +13,6 @@ Schedule::command('payments:dunning')->dailyAt('09:00')->timezone('America/Mexic
 
 // Continuously watch every bot conversation for spam loops / stuck clients.
 Schedule::command('bot:monitor')->everyMinute()->withoutOverlapping();
+
+// Once a day, send ONE reminder to leads who went silent mid-funnel (re-engage warm prospects).
+Schedule::command('bot:followups')->dailyAt('11:00')->timezone('America/Mexico_City')->withoutOverlapping();

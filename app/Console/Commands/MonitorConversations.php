@@ -5,9 +5,12 @@ namespace App\Console\Commands;
 use App\Enums\MessageDirection;
 use App\Models\Conversation;
 use App\Models\Message;
+use App\Models\WhatsAppAccount;
 use App\Services\WhatsAppGateway;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
@@ -57,6 +60,9 @@ class MonitorConversations extends Command
                 }
             });
 
+        // Also watch the deploy queue (the conversation loop above is blind to it).
+        $this->checkDeployQueue($gateway, $owner, $alerts);
+
         $this->info("Monitor done. {$alerts} alert(s).");
 
         return self::SUCCESS;
@@ -64,9 +70,11 @@ class MonitorConversations extends Command
 
     private function notifyOwner(WhatsAppGateway $gateway, string $owner, Conversation $conv, string $reason, int &$alerts): void
     {
-        // Don't spam the owner: one alert per conversation+reason per hour.
+        // Don't spam the owner: one alert per conversation+reason per hour. But only burn the
+        // dedup key AFTER a confirmed send — if the gateway is down (the very thing worth alerting
+        // on), we must be able to alert again next minute instead of silently swallowing it.
         $key = 'mon-alert:'.$conv->id.':'.md5($reason);
-        if (! Cache::add($key, 1, now()->addHour())) {
+        if (Cache::has($key)) {
             return;
         }
         $who = $conv->lead?->company ?: ($conv->lead?->name ?: ($conv->contact_phone ?? 'cliente'));
@@ -75,9 +83,54 @@ class MonitorConversations extends Command
         if ($owner && $conv->whatsappAccount) {
             try {
                 $gateway->sendText($conv->whatsappAccount->session_name, $owner.'@s.whatsapp.net', $msg);
+                Cache::put($key, 1, now()->addHour());
+                $alerts++;
             } catch (\Throwable $e) {
+                Log::warning('owner alert failed', ['conv' => $conv->id, 'e' => $e->getMessage()]);
             }
         }
-        $alerts++;
+    }
+
+    /**
+     * M13: watch the deploy queue itself — a dead worker or a thrown job means a client was
+     * promised a build/change that may never land, and the conversation monitor can't see it.
+     */
+    private function checkDeployQueue(WhatsAppGateway $gateway, string $owner, int &$alerts): void
+    {
+        try {
+            $failed = DB::table('failed_jobs')->where('failed_at', '>=', now()->subHours(6))->count();
+            // Database queue stores created_at as a unix timestamp; a 'deploy' job sitting >25 min
+            // means the worker is stuck/down (real builds finish or fail well within that).
+            $stuck = DB::table('jobs')->where('queue', 'deploy')
+                ->where('created_at', '<=', now()->subMinutes(25)->getTimestamp())->count();
+            if ($failed === 0 && $stuck === 0) {
+                return;
+            }
+            $key = 'mon-queue-alert';
+            if (Cache::has($key)) {
+                return;
+            }
+            $parts = [];
+            if ($failed > 0) {
+                $parts[] = "{$failed} trabajo(s) fallido(s)";
+            }
+            if ($stuck > 0) {
+                $parts[] = "{$stuck} despliegue(s) atascado(s) >25 min";
+            }
+            $msg = '⚠️ *Cola de despliegues*: '.implode(', ', $parts)
+                .'. Un cliente puede estar esperando un cambio o sitio que no llegó. Revisa el worker/panel.';
+            $account = WhatsAppAccount::where('session_name', 'overcloud-bot')->first();
+            if ($owner && $account) {
+                try {
+                    $gateway->sendText($account->session_name, $owner.'@s.whatsapp.net', $msg);
+                    Cache::put($key, 1, now()->addHour());
+                    $alerts++;
+                } catch (\Throwable $e) {
+                    Log::warning('queue alert failed', ['e' => $e->getMessage()]);
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning('checkDeployQueue failed', ['e' => $e->getMessage()]);
+        }
     }
 }

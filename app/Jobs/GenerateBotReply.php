@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Enums\MessageType;
 use App\Models\Message;
 use App\Services\BotResponder;
 use App\Services\TranscriptionService;
@@ -58,6 +59,16 @@ class GenerateBotReply implements ShouldQueue
         $vision->describe($message);
         $message->refresh();
 
+        // A voice note we couldn't transcribe (e.g. too large to download) must NOT be turned into a
+        // fake "[el cliente envió un audio]" body and run through the funnel — that would have the bot
+        // act on a guessed instruction. Ask the client to resend instead, and stop here.
+        if (blank($message->body) && $message->type === MessageType::Audio) {
+            $responder->notice($message->conversation,
+                'Perdón, no pude escuchar bien tu audio 🙈 ¿Me lo puedes escribir o reenviar? Con gusto te ayudo enseguida. 🙌');
+
+            return;
+        }
+
         // If transcription/vision failed and there's still no text, fall back to the caption
         // or a sensible placeholder so the bot still engages instead of choking on an empty body.
         if (blank($message->body)) {
@@ -65,7 +76,6 @@ class GenerateBotReply implements ShouldQueue
                 ? $message->caption
                 : match ($message->type->value) {
                     'image' => '[el cliente envió una imagen]',
-                    'audio' => '[el cliente envió un audio]',
                     'document' => '[el cliente envió un documento]',
                     default => '[el cliente envió un mensaje]',
                 };

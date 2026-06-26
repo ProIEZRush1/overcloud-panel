@@ -219,14 +219,37 @@ class DeployService
         }
         // Web stacks render content into the served HTML (Inertia props / SSR) — confirm
         // the real business content is present, not a generic error/placeholder page.
+        // NOTE: the always-present "Overcloud" footer is NOT proof the page built — checking it
+        // made verify pass on a blank/error page, so we require the business's own content.
+        // Match accent/emoji-insensitively (the rendered name may be restyled, e.g. "Café"/"Cafe ✡️")
+        // and fall back to a distinctive word, so a CORRECTLY-applied change is never failed (→ rolled
+        // back) just because the displayed name differs from the raw company string.
         if (($stack['kind'] ?? 'web') === 'web') {
-            $biz = (string) ($content['business'] ?? '');
-            if ($biz !== '' && ! Str::contains($html, $biz) && ! Str::contains($html, 'Overcloud')) {
+            $biz = trim((string) ($content['business'] ?? ''));
+            if ($biz !== '' && ! $this->htmlMentionsBusiness($html, $biz)) {
                 return ['ok' => false, 'reason' => 'contenido no presente'];
             }
         }
 
         return ['ok' => true, 'reason' => 'ok'];
+    }
+
+    /** True if the served HTML shows the business — accent/emoji-insensitive, with a word fallback. */
+    private function htmlMentionsBusiness(string $html, string $biz): bool
+    {
+        $htmlNorm = Str::lower(Str::ascii($html));
+        $bizNorm = Str::lower(Str::ascii($biz));
+        if ($bizNorm === '' || Str::contains($htmlNorm, $bizNorm)) {
+            return true;
+        }
+        // Fallback: a distinctive word of the name renders (handles a restyled/abbreviated heading).
+        foreach (preg_split('/\s+/', $bizNorm) as $word) {
+            if (strlen($word) >= 4 && Str::contains($htmlNorm, $word)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -590,9 +613,15 @@ class DeployService
         $name = basename($project->repo_url);
         $dir = storage_path('builds/'.$name.'-chg-'.Str::lower(Str::random(4)));
 
-        if (! $this->cloneRepo($c, $name, $dir)
-            || ! $this->agent->isAvailable()
+        if (! $this->cloneRepo($c, $name, $dir)) {
+            return false;
+        }
+        // Remember the known-good commit so a broken change can be rolled back off the LIVE site.
+        $goodSha = $this->currentSha($dir);
+
+        if (! $this->agent->isAvailable()
             || ! $this->agent->change($project, $dir, $instruction)
+            || ! $this->dirHasChanges($dir)   // the agent must have actually edited something (no silent no-op)
             || ! $this->pushDir($c, $dir, $name)) {
             return false;
         }
@@ -610,7 +639,58 @@ class DeployService
             }
         }
 
+        // The change never verified live → restore the known-good version so the client is never
+        // left with a broken/garbled site, then report failure (ApplyChange alerts the owner).
+        if ($goodSha) {
+            $this->rollback($c, $dir, $name, $goodSha, $project, $content, $stack);
+        }
+
         return false;
+    }
+
+    /** Current HEAD sha of a checkout — the known-good commit before we apply a change. */
+    private function currentSha(string $dir): ?string
+    {
+        try {
+            $r = Process::timeout(30)->run(['bash', '-lc', 'git -C '.escapeshellarg($dir).' rev-parse HEAD']);
+
+            return $r->successful() ? (trim($r->output()) ?: null) : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /** Whether the agent actually modified files (else the "change" is a no-op not worth deploying). */
+    private function dirHasChanges(string $dir): bool
+    {
+        try {
+            $r = Process::timeout(30)->run(['bash', '-lc', 'git -C '.escapeshellarg($dir).' status --porcelain']);
+
+            return ! $r->successful() || trim($r->output()) !== ''; // can't tell → don't block
+        } catch (\Throwable $e) {
+            return true;
+        }
+    }
+
+    /** Restore the live site to a known-good commit after a failed change, and redeploy it. */
+    private function rollback(array $c, string $dir, string $name, string $sha, Project $project, array $content, array $stack): void
+    {
+        $remote = "https://x-access-token:{$c['github_token']}@github.com/{$c['github_owner']}/{$name}.git";
+        $clean = "https://github.com/{$c['github_owner']}/{$name}.git";
+        $script = 'cd '.escapeshellarg($dir).' && (git remote add origin '.escapeshellarg($remote)
+            .' 2>/dev/null || git remote set-url origin '.escapeshellarg($remote).') && '
+            .'git push -q --force origin '.escapeshellarg($sha).':refs/heads/main; rc=$?; '
+            .'git remote set-url origin '.escapeshellarg($clean).' 2>/dev/null; exit $rc';
+        try {
+            if (Process::timeout(120)->run(['bash', '-lc', $script])->successful()) {
+                $dep = $this->triggerDeploy($c, $project->coolify_app_uuid);
+                $this->waitForLive($c, $dep, $project->prod_url, $content, $stack);
+                $this->purgeCache($c, $project->prod_url);
+                Log::warning('applyChange rolled back to known-good', ['project' => $project->id, 'sha' => $sha]);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('rollback failed', ['project' => $project->id, 'e' => $e->getMessage()]);
+        }
     }
 
     /** Purge the site's cached assets at Cloudflare so changes are visible immediately. */

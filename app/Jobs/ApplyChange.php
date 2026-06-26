@@ -10,6 +10,8 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 
 /**
  * Applies a client-requested change to a delivered project (clone -> edit -> redeploy)
@@ -39,24 +41,48 @@ class ApplyChange implements ShouldQueue
             return;
         }
 
-        $label = $project->name ?: ('#'.$project->id);
+        // Serialize changes per project: if another change/deploy is in flight, retry shortly
+        // (retryUntil keeps it alive) instead of two jobs racing the same repo + Coolify app.
+        $lock = Cache::lock('deploy-project:'.$this->projectId, 1800);
+        if (! $lock->get()) {
+            $this->release(30);
 
-        // Always tell the owner an autonomous change touched a live site — on BOTH outcomes —
-        // so a misheard/unintended auto-change can never happen invisibly (it did before).
-        $deploy->alertOwner('🔧 Cambio en "'.$label.'": "'.$this->instruction.'". Aplicándolo a '.($project->prod_url ?: 's/u').' …');
+            return;
+        }
 
-        $ok = $deploy->applyChange($project, $this->instruction);
+        try {
+            $label = $project->name ?: ('#'.$project->id);
 
-        // Only tell the client on success — never surface an error to them.
-        $conv = $project->lead?->conversations()->where('is_group', false)->first();
-        $account = $conv?->whatsappAccount;
-        if ($ok && $conv && $account) {
-            $gateway->sendText($account->session_name, $conv->contact_jid,
-                "¡Listo! ✅ Ya apliqué el cambio en tu sitio:\n{$project->prod_url}\n\n¿Algo más en lo que te ayude? 🙌");
-            $deploy->alertOwner('✅ Cambio aplicado en "'.$label.'": "'.$this->instruction.'". → '.$project->prod_url);
-        } elseif (! $ok) {
-            // Alert the OWNER (not the client) so a human can apply the change.
-            $deploy->alertOwner('⚠️ No se pudo aplicar el cambio de "'.$label.'": "'.$this->instruction.'". Hazlo manual.');
+            // Always tell the owner an autonomous change touched a live site — on BOTH outcomes —
+            // so a misheard/unintended auto-change can never happen invisibly (it did before).
+            $deploy->alertOwner('🔧 Cambio en "'.$label.'": "'.$this->instruction.'". Aplicándolo a '.($project->prod_url ?: 's/u').' …');
+
+            $ok = $deploy->applyChange($project, $this->instruction);
+
+            // Only tell the client on success — never surface an error to them.
+            $conv = $project->lead?->conversations()->where('is_group', false)->first();
+            $account = $conv?->whatsappAccount;
+            if ($ok && $conv && $account) {
+                $gateway->sendText($account->session_name, $conv->contact_jid,
+                    "¡Listo! ✅ Ya apliqué el cambio en tu sitio:\n{$project->prod_url}\n\n¿Algo más en lo que te ayude? 🙌");
+                $deploy->alertOwner('✅ Cambio aplicado en "'.$label.'": "'.$this->instruction.'". → '.$project->prod_url);
+            } elseif (! $ok) {
+                // Alert the OWNER (not the client) so a human can apply the change.
+                $deploy->alertOwner('⚠️ No se pudo aplicar el cambio de "'.$label.'": "'.$this->instruction.'". Hazlo manual.');
+            }
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /** A killed/exception change still alerts the owner so a promised change never silently vanishes. */
+    public function failed(\Throwable $e): void
+    {
+        try {
+            app(DeployService::class)->alertOwner(
+                '⚠️ El cambio del proyecto #'.$this->projectId.' falló: '.Str::limit($e->getMessage(), 160).'. Aplícalo manual.'
+            );
+        } catch (\Throwable $ignored) {
         }
     }
 }

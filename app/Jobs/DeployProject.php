@@ -4,19 +4,22 @@ namespace App\Jobs;
 
 use App\Enums\LeadStage;
 use App\Models\Project;
+use App\Services\BillingService;
 use App\Services\DeployService;
 use App\Services\WhatsAppGateway;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * Builds + deploys the client's site after payment, then notifies them with the
  * live URL (DM + project group). Runs on the queue since it waits for the build.
  */
-class DeployProject implements ShouldQueue
+class DeployProject implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable;
     use InteractsWithQueue;
@@ -24,6 +27,14 @@ class DeployProject implements ShouldQueue
     use SerializesModels;
 
     public int $timeout = 1800;
+
+    /** No two concurrent builds for the same project (a double-dispatch is a no-op duplicate). */
+    public int $uniqueFor = 3600;
+
+    public function uniqueId(): string
+    {
+        return (string) $this->projectId;
+    }
 
     /** Survive a worker restart (deploys): retry a killed build instead of stranding the client. */
     public function retryUntil(): \DateTimeInterface
@@ -40,33 +51,46 @@ class DeployProject implements ShouldQueue
             return;
         }
 
-        $conv = $project->lead?->conversations()->where('is_group', false)->first();
-        $account = $conv?->whatsappAccount;
-
-        $url = $deploy->deploy($project);
-
-        // Deploy failed E2E after retries — alert the owner, don't bother the client.
-        if (! $url) {
-            if ($account) {
-                $owner = config('overcloud.company.owner_phone');
-                $gateway->sendText($account->session_name, $owner.'@s.whatsapp.net',
-                    "⚠️ El despliegue del proyecto *{$project->name}* no pasó las pruebas tras varios intentos. Requiere revisión manual.");
-            }
+        // Mutually exclusive with ApplyChange (shared lock key) so an initial build and a change
+        // can never push the same repo / trigger the same Coolify app at the same time.
+        $lock = Cache::lock('deploy-project:'.$this->projectId, 1800);
+        if (! $lock->get()) {
+            $this->release(30);
 
             return;
         }
 
-        // Delivered: subsequent client messages route to change-handling.
-        $project->lead?->update(['stage' => LeadStage::Delivered]);
+        try {
+            $conv = $project->lead?->conversations()->where('is_group', false)->first();
+            $account = $conv?->whatsappAccount;
 
-        // Hand over the site + admin access and charge the 30% milestone (7-day window + changes).
-        app(\App\Services\BillingService::class)->onDeployed($project);
-        if ($project->whatsapp_group_jid && $account) {
-            try {
-                $gateway->sendText($account->session_name, $project->whatsapp_group_jid, "🚀 ¡Sitio publicado! {$url}");
-            } catch (\Throwable $e) {
-                // group may be restricted
+            $url = $deploy->deploy($project);
+
+            // Deploy failed E2E after retries — alert the owner, don't bother the client.
+            if (! $url) {
+                if ($account) {
+                    $owner = config('overcloud.company.owner_phone');
+                    $gateway->sendText($account->session_name, $owner.'@s.whatsapp.net',
+                        "⚠️ El despliegue del proyecto *{$project->name}* no pasó las pruebas tras varios intentos. Requiere revisión manual.");
+                }
+
+                return;
             }
+
+            // Delivered: subsequent client messages route to change-handling.
+            $project->lead?->update(['stage' => LeadStage::Delivered]);
+
+            // Hand over the site + admin access and charge the 30% milestone (7-day window + changes).
+            app(BillingService::class)->onDeployed($project);
+            if ($project->whatsapp_group_jid && $account) {
+                try {
+                    $gateway->sendText($account->session_name, $project->whatsapp_group_jid, "🚀 ¡Sitio publicado! {$url}");
+                } catch (\Throwable $e) {
+                    // group may be restricted
+                }
+            }
+        } finally {
+            $lock->release();
         }
     }
 }
