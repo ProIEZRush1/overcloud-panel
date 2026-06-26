@@ -66,6 +66,17 @@ class WhatsAppGateway
     }
 
     /**
+     * Send a native in-chat interactive menu. $spec:
+     *   ['body'=>'...', 'footer'=>'...', 'button'=>'Ver opciones',
+     *    'sections'=>[['title'=>'', 'rows'=>[['title'=>'', 'description'=>'', 'id'=>'']]]],
+     *    'buttons'=>[['type'=>'quick_reply'|'cta_url', 'text'=>'', 'id'=>'', 'url'=>'']]]
+     */
+    public function sendInteractive(string $session, string $to, array $spec): array
+    {
+        return $this->postSend($session, ['to' => $to, 'interactive' => $spec]);
+    }
+
+    /**
      * POST a send and retry until WhatsApp actually confirms it (returns a wa_message_id).
      * Baileys can answer HTTP 200 with ok:false / no id (accepted but NOT delivered), which
      * silently dropped demo links and replies — so we retry instead of trusting the 200.
