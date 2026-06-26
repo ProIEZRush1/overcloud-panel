@@ -39,6 +39,12 @@ class ApplyChange implements ShouldQueue
             return;
         }
 
+        $label = $project->name ?: ('#'.$project->id);
+
+        // Always tell the owner an autonomous change touched a live site — on BOTH outcomes —
+        // so a misheard/unintended auto-change can never happen invisibly (it did before).
+        $deploy->alertOwner('🔧 Cambio en "'.$label.'": "'.$this->instruction.'". Aplicándolo a '.($project->prod_url ?: 's/u').' …');
+
         $ok = $deploy->applyChange($project, $this->instruction);
 
         // Only tell the client on success — never surface an error to them.
@@ -47,9 +53,10 @@ class ApplyChange implements ShouldQueue
         if ($ok && $conv && $account) {
             $gateway->sendText($account->session_name, $conv->contact_jid,
                 "¡Listo! ✅ Ya apliqué el cambio en tu sitio:\n{$project->prod_url}\n\n¿Algo más en lo que te ayude? 🙌");
+            $deploy->alertOwner('✅ Cambio aplicado en "'.$label.'": "'.$this->instruction.'". → '.$project->prod_url);
         } elseif (! $ok) {
             // Alert the OWNER (not the client) so a human can apply the change.
-            $deploy->alertOwner('🔧 No se pudo aplicar el cambio de "'.($project->name ?: $project->id).'": "'.$this->instruction.'". Hazlo manual.');
+            $deploy->alertOwner('⚠️ No se pudo aplicar el cambio de "'.$label.'": "'.$this->instruction.'". Hazlo manual.');
         }
     }
 }

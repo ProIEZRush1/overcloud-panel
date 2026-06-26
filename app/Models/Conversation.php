@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Carbon;
 
 class Conversation extends Model
 {
@@ -52,5 +53,37 @@ class Conversation extends Model
     {
         return $this->ai_enabled
             && $this->status === ConversationStatus::Bot;
+    }
+
+    /** A live-site change captured from a voice note / ambiguous message, awaiting the
+     *  client's explicit "sí" before we touch their site. Expires after 30 minutes so a
+     *  stale, forgotten confirmation never fires later. Returns the instruction or null. */
+    public function pendingChange(): ?string
+    {
+        $pc = $this->meta['pending_change'] ?? null;
+        if (! is_array($pc) || empty($pc['instruction']) || empty($pc['at'])) {
+            return null;
+        }
+        if (Carbon::parse($pc['at'])->lt(now()->subMinutes(30))) {
+            return null;
+        }
+
+        return (string) $pc['instruction'];
+    }
+
+    public function setPendingChange(string $instruction): void
+    {
+        $this->meta = array_merge($this->meta ?? [], [
+            'pending_change' => ['instruction' => $instruction, 'at' => now()->toIso8601String()],
+        ]);
+        $this->save();
+    }
+
+    public function clearPendingChange(): void
+    {
+        $meta = $this->meta ?? [];
+        unset($meta['pending_change']);
+        $this->meta = $meta;
+        $this->save();
     }
 }

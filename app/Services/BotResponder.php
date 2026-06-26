@@ -14,11 +14,13 @@ use App\Jobs\DeployProject;
 use App\Models\Conversation;
 use App\Models\Lead;
 use App\Models\Message;
+use App\Models\PaymentProposal;
 use App\Models\Project;
 use App\Models\Service;
 use App\Models\ServiceFeature;
 use App\Models\Spec;
 use App\Support\Money;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -63,6 +65,15 @@ class BotResponder
         $text = Str::lower(trim($inbound->body ?? ''));
         $isMedia = in_array($inbound->type, [MessageType::Image, MessageType::Document], true);
 
+        // A live-site change captured from a voice note is held until the client confirms it
+        // verbatim. A clean "sí" applies it; anything else cancels it and is handled normally.
+        if ($pending = $conversation->pendingChange()) {
+            if ($this->isYes($text)) {
+                return $this->dispatchConfirmedChange($conversation, $lead, $pending);
+            }
+            $conversation->clearPendingChange();
+        }
+
         return match ($lead->stage) {
             LeadStage::New => $this->onNew($conversation, $lead),
             LeadStage::Qualifying => $this->onQualifying($conversation, $lead, $inbound, $text),
@@ -71,7 +82,7 @@ class BotResponder
             LeadStage::Quoted => $this->onQuoted($conversation, $lead, $text),
             LeadStage::Accepted, LeadStage::AwaitingPayment => $this->onAwaitingPayment($conversation, $lead, $isMedia, $text),
             LeadStage::Paid => $this->onGathering($conversation, $lead, $inbound, $text),
-            LeadStage::InProduction, LeadStage::Delivered, LeadStage::Maintenance, LeadStage::Review => $this->onProduction($conversation, $lead, $text),
+            LeadStage::InProduction, LeadStage::Delivered, LeadStage::Maintenance, LeadStage::Review => $this->onProduction($conversation, $lead, $inbound, $text),
             LeadStage::Lost => $this->send($conversation, $this->claudeOr($conversation,
                 '¡Qué gusto saludarte de nuevo! 🙌 ¿Retomamos tu proyecto? Cuéntame qué necesitas y seguimos.')),
             default => $this->send($conversation, $this->claudeOr($conversation,
@@ -140,7 +151,7 @@ class BotResponder
     }
 
     /** Public: owner approved/rejected a payment proposal → tell the client and continue. */
-    public function resolveProposal(\App\Models\PaymentProposal $proposal, bool $approved, ?string $notes = null): void
+    public function resolveProposal(PaymentProposal $proposal, bool $approved, ?string $notes = null): void
     {
         $conversation = $proposal->conversation
             ?? Conversation::where('lead_id', $proposal->lead_id)->where('is_group', false)->first();
@@ -243,17 +254,43 @@ class BotResponder
     }
 
     /** After delivery: apply change requests, otherwise stay available. */
-    private function onProduction(Conversation $conversation, Lead $lead, string $text): ?Message
+    private function onProduction(Conversation $conversation, Lead $lead, Message $inbound, string $text): ?Message
     {
-        $project = Project::where('lead_id', $lead->id)->latest()->first();
+        $project = Project::where('lead_id', $lead->id)->latest('id')->first();
         if ($project && $project->repo_url && $project->coolify_app_uuid && $this->looksLikeChange($text)) {
-            ApplyChange::dispatch($project->id, $text)->onQueue('deploy');
+            // Send Claude the ORIGINAL-case message, never the lowercased match copy
+            // (lowercasing corrupts URLs, brand casing and filenames in the instruction).
+            $instruction = trim((string) $inbound->body);
 
-            return $this->send($conversation, '¡Claro! 🙌 Aplico ese cambio en tu sitio y te aviso en cuanto quede actualizado. 🔧');
+            // Voice notes are transcribed (often imperfectly). NEVER mutate a live site from an
+            // unconfirmed transcription — echo what we understood and wait for an explicit "sí".
+            if ($inbound->type === MessageType::Audio) {
+                $conversation->setPendingChange($instruction);
+
+                return $this->send($conversation,
+                    "Entendí que quieres este cambio:\n«{$instruction}»\n\n¿Lo aplico a tu sitio? Respóndeme *sí* para confirmar. 🙌");
+            }
+
+            return $this->dispatchConfirmedChange($conversation, $lead, $instruction);
         }
 
         return $this->send($conversation, $this->claudeOr($conversation,
             'Tu proyecto ya está en línea ✅ Si quieres algún ajuste o cambio, descríbemelo y lo aplico. 🙌'));
+    }
+
+    /** Apply a confirmed live-site change: dispatch the job and acknowledge the client. */
+    private function dispatchConfirmedChange(Conversation $conversation, Lead $lead, string $instruction): ?Message
+    {
+        $conversation->clearPendingChange();
+        $project = Project::where('lead_id', $lead->id)->latest('id')->first();
+        if (! $project || ! $project->repo_url || ! $project->coolify_app_uuid) {
+            return $this->send($conversation, $this->claudeOr($conversation,
+                'Tu proyecto ya está en línea ✅ Si quieres algún ajuste o cambio, descríbemelo y lo aplico. 🙌'));
+        }
+
+        ApplyChange::dispatch($project->id, $instruction)->onQueue('deploy');
+
+        return $this->send($conversation, '¡Claro! 🙌 Aplico ese cambio en tu sitio y te aviso en cuanto quede actualizado. 🔧');
     }
 
     /** Scope stage: wait for the client to confirm the alcance before quoting. */
@@ -272,8 +309,10 @@ class BotResponder
     {
         $lead->update(['stage' => LeadStage::Negotiating]);
         if (config('overcloud.deploy.enabled')) {
-            // Reserve the domain right away so DNS propagates while the demo builds.
-            app(DeployService::class)->reserveDomain(Str::slug($lead->company ?: $lead->name ?: 'sitio').'-demo');
+            // Reserve the domain right away so DNS propagates while the demo builds — the SAME
+            // unique per-lead subdomain that deployDemo() will assign (no cross-client collision).
+            $deploy = app(DeployService::class);
+            $deploy->reserveDomain($deploy->demoSubdomain($lead));
             BuildDemo::dispatch($lead->id)->onQueue('deploy');
         }
 
@@ -413,6 +452,12 @@ class BotResponder
             return false;
         }
 
+        // An explicit decline or "not yet" is never a yes ("no apruebo", "todavía no", "mejor no").
+        if (preg_match('/\bno\s+(lo\s+|le\s+|me\s+)?(apruebo|aprueb|acepto|acept|quiero|gracias|por ahora|todav|aun|aún)/u', $text)
+            || preg_match('/\b(todav[ií]a no|a[uú]n no|por ahora no|no por ahora|ahorita no|mejor no|aún no|aun no)\b/u', $text)) {
+            return false;
+        }
+
         return Str::contains($text, ['aprob', 'aprueb', 'acept', 'adelante', 'dale', 'sí', 'si,', 'claro', 'ok', 'okay', 'perfecto', 'me late', 'encant', 'me gusta', 'me fascina', 'genial', 'excelente', 'procede', 'proced', 'de acuerdo', 'va pues', 'hágale', 'hagale', 'confirm']);
     }
 
@@ -436,10 +481,31 @@ class BotResponder
         return Str::contains($text, ['hazlo tú', 'hazlo tu', 'hazlo todo', 'haz todo', 'encárgate', 'encargate', 'tú te encargas', 'tu te encargas', 'de todo', 'tú hazlo', 'tu hazlo', 'has todo', 'encargate de todo', 'me encargo no', 'hazlo por mí', 'hazlo por mi']);
     }
 
-    /** Heuristic: the client is describing a change to the delivered site. */
+    /** Heuristic: the client is describing a change to the delivered site (a command, not a
+     *  question or a "don't change anything"). Biased to false on ambiguity — a missed change
+     *  just re-prompts the client, while a false positive would auto-deploy on their live site. */
     private function looksLikeChange(string $text): bool
     {
-        return Str::contains($text, ['cambi', 'cámbi', 'agrega', 'añade', 'anade', 'quita', 'pon ', 'ponle', 'modific', 'color', 'logo', 'texto', 'precio', 'producto', 'foto', 'imagen', 'ajusta', 'mueve', 'actualiza', 'reemplaza', 'más grande', 'mas grande', 'más chico']);
+        $text = trim($text);
+        // A question is not a change order ("¿se puede cambiar el color?", "cuánto cuesta el logo").
+        if (Str::endsWith($text, '?') || Str::startsWith($text, ['¿', 'que ', 'qué ', 'como ', 'cómo ', 'cuando ', 'cuándo ', 'cuanto ', 'cuánto ', 'donde ', 'dónde ', 'por que', 'por qué', 'puedo ', 'se puede', 'podrias', 'podrías', 'podemos'])) {
+            return false;
+        }
+        // An explicit negation is not a change order ("no le cambies nada al texto").
+        if (preg_match('/\bno\s+(me\s+|le\s+|lo\s+|la\s+)?(cambies|cambie|agregues|agregue|quites|quite|pongas|ponga|modifiques|modifique|toques|toque|muevas|actualices)\b/u', $text)) {
+            return false;
+        }
+
+        // Require an actual change ACTION (a verb or a size modifier) — a bare noun like
+        // "color"/"foto"/"logo"/"precio" alone is usually a question, a compliment or a fact,
+        // and must not auto-deploy. The client describing a real edit always uses a verb.
+        return Str::contains($text, [
+            'cambi', 'cámbi', 'agrega', 'agrég', 'añade', 'añád', 'anade', 'quita', 'quíta',
+            'pon ', 'ponle', 'ponme', 'modific', 'ajusta', 'ajús', 'mueve', 'muéve', 'actualiza',
+            'reemplaza', 'súbele', 'subele', 'bájale', 'bajale', 'corrige', 'corríge', 'arregla',
+            'coloca', 'elimina', 'borra', 'más grande', 'mas grande', 'más chico', 'mas chico',
+            'más pequeñ', 'mas pequeñ',
+        ]);
     }
 
     /** Client proposing a different payment arrangement than the standard plan. */
@@ -456,11 +522,11 @@ class BotResponder
     private function recordPaymentProposal(Conversation $conversation, Lead $lead, string $text): Message
     {
         // One pending proposal per lead — update its text instead of piling up duplicates.
-        $existing = \App\Models\PaymentProposal::where('lead_id', $lead->id)->where('status', 'pending')->first();
+        $existing = PaymentProposal::where('lead_id', $lead->id)->where('status', 'pending')->first();
         if ($existing) {
             $existing->update(['proposal' => $text, 'conversation_id' => $conversation->id]);
         } else {
-            \App\Models\PaymentProposal::create([
+            PaymentProposal::create([
                 'lead_id' => $lead->id, 'conversation_id' => $conversation->id,
                 'proposal' => $text, 'status' => 'pending',
             ]);
@@ -469,7 +535,7 @@ class BotResponder
         try {
             $owner = (string) config('overcloud.owner_phone');
             if ($owner && $conversation->whatsappAccount
-                && \Illuminate\Support\Facades\Cache::add('proposal-alert:'.$lead->id, 1, now()->addHour())) {
+                && Cache::add('proposal-alert:'.$lead->id, 1, now()->addHour())) {
                 $who = $lead->company ?: ($lead->name ?: $conversation->contact_phone);
                 $this->gateway->sendText($conversation->whatsappAccount->session_name, $owner.'@s.whatsapp.net',
                     "💳 *Propuesta de pago* de {$who}:\n\"".Str::limit($text, 120)."\"\n\nApruébala o recházala en el panel y el bot le avisa.");

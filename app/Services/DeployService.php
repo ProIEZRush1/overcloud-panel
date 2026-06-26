@@ -6,6 +6,7 @@ use App\Contracts\Assistant;
 use App\Enums\ProjectStatus;
 use App\Models\Lead;
 use App\Models\Project;
+use App\Models\WhatsAppAccount;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
@@ -98,7 +99,9 @@ class DeployService
         $this->applyEnv($c, $uuid, (array) ($brief['env'] ?? []));
 
         // Nice domain under overcloud.us (falls back to the default sslip.io if Cloudflare unset).
-        $nice = $this->assignDomain($c, $uuid, Str::slug($project->lead?->company ?: $project->lead?->name ?: 'sitio'));
+        // The subdomain is unique PER PROJECT (uuid suffix) so two clients with the same name
+        // never share a URL — and stable across redeploys so a client's link never changes.
+        $nice = $this->assignDomain($c, $uuid, $this->subdomainFor($project));
         if ($nice) {
             $url = $nice;
             $project->update(['prod_url' => $url, 'domain' => $url]);
@@ -159,8 +162,9 @@ class DeployService
             return null;
         }
 
-        // Nice demo domain under overcloud.us.
-        $nice = $this->assignDomain($c, $uuid, Str::slug($lead->company ?: $lead->name ?: 'sitio').'-demo');
+        // Nice demo domain under overcloud.us — unique per lead so two same-named clients
+        // never share one demo URL (which would serve one client's demo to the other).
+        $nice = $this->assignDomain($c, $uuid, $this->demoSubdomain($lead));
         if ($nice) {
             $url = $nice;
         }
@@ -404,6 +408,22 @@ class DeployService
         }
     }
 
+    /** Stable, collision-free production subdomain for a project: <slug>-<project uuid prefix>. */
+    public function subdomainFor(Project $project): string
+    {
+        $slug = Str::slug($project->lead?->company ?: $project->lead?->name ?: 'sitio') ?: 'sitio';
+
+        return $slug.'-'.substr((string) $project->uuid, 0, 6);
+    }
+
+    /** Stable, collision-free demo subdomain for a lead: <slug>-demo-<lead uuid prefix>. */
+    public function demoSubdomain(Lead $lead): string
+    {
+        $slug = Str::slug($lead->company ?: $lead->name ?: 'sitio') ?: 'sitio';
+
+        return $slug.'-demo-'.substr((string) $lead->uuid, 0, 6);
+    }
+
     /** Reserve the domain (Cloudflare A record, proxied) early so DNS propagates during the build. */
     public function reserveDomain(string $subdomain): ?string
     {
@@ -415,10 +435,19 @@ class DeployService
         return $this->createDns($c, $subdomain) ? $subdomain.'.'.$c['base_domain'] : null;
     }
 
-    /** Delete leftover Coolify apps whose name starts with $prefix (except $keep) to avoid domain collisions. */
+    /**
+     * Delete ONLY genuine orphan Coolify apps: name matches $prefix, isn't the one we just
+     * built ($keep), AND is not owned by any project in our DB. Never deletes a live client
+     * app and never destroys volumes (irreversible) — a deploy must not be able to wipe
+     * another client's site or data just because their slugs share a prefix.
+     */
     private function removeStaleApps(array $c, string $prefix, string $keep): void
     {
         try {
+            // Every app a project owns is OFF LIMITS, regardless of name.
+            $owned = Project::whereNotNull('coolify_app_uuid')
+                ->pluck('coolify_app_uuid')->filter()->all();
+
             $apps = Http::withToken($c['coolify_token'])->timeout(20)
                 ->get($c['coolify_url'].'/applications')->json();
             if (! is_array($apps)) {
@@ -427,11 +456,12 @@ class DeployService
             foreach ($apps as $a) {
                 $n = $a['name'] ?? '';
                 $uuid = $a['uuid'] ?? null;
-                if ($uuid && $n !== $keep && Str::startsWith($n, $prefix)) {
-                    Http::withToken($c['coolify_token'])->timeout(25)
-                        ->delete($c['coolify_url']."/applications/{$uuid}", ['delete_volumes' => true, 'delete_configurations' => true]);
-                    Log::info('removed stale app', ['name' => $n]);
+                if (! $uuid || $n === $keep || ! Str::startsWith($n, $prefix) || in_array($uuid, $owned, true)) {
+                    continue;
                 }
+                Http::withToken($c['coolify_token'])->timeout(25)
+                    ->delete($c['coolify_url']."/applications/{$uuid}", ['delete_volumes' => false, 'delete_configurations' => true]);
+                Log::info('removed orphan app', ['name' => $n]);
             }
         } catch (\Throwable $e) {
             Log::warning('removeStaleApps failed', ['e' => $e->getMessage()]);
@@ -532,11 +562,15 @@ class DeployService
     private function pushDir(array $c, string $dir, string $name): bool
     {
         $remote = "https://x-access-token:{$c['github_token']}@github.com/{$c['github_owner']}/{$name}.git";
+        $clean = "https://github.com/{$c['github_owner']}/{$name}.git";
+        // Inject the token only for the push, then scrub it back to a tokenless remote so the
+        // PAT never lingers in a build dir that an untrusted agent might later read.
         $script = 'cd '.escapeshellarg($dir).' && git init -q && git add -A && '
             .'git -c user.email=bot@overcloud.us -c user.name=Overcloud commit -q -m build && '
             .'git branch -M main && (git remote add origin '.escapeshellarg($remote)
             .' 2>/dev/null || git remote set-url origin '.escapeshellarg($remote).') && '
-            .'git push -q -u origin main --force';
+            .'git push -q -u origin main --force; rc=$?; '
+            .'git remote set-url origin '.escapeshellarg($clean).' 2>/dev/null; exit $rc';
         try {
             return Process::timeout(180)->run(['bash', '-lc', $script])->successful();
         } catch (\Throwable $e) {
@@ -601,11 +635,17 @@ class DeployService
 
     private function cloneRepo(array $c, string $name, string $dir): bool
     {
-        $remote = "https://x-access-token:{$c['github_token']}@github.com/{$c['github_owner']}/{$name}.git";
+        $tokenRemote = "https://x-access-token:{$c['github_token']}@github.com/{$c['github_owner']}/{$name}.git";
+        $cleanRemote = "https://github.com/{$c['github_owner']}/{$name}.git";
         try {
+            // Clone with the token, then IMMEDIATELY strip it from .git/config — the
+            // build dir is then handed to an untrusted, client-instructed Claude agent that
+            // could otherwise read the org-wide PAT straight out of <dir>/.git/config.
             // chmod -R so the non-root 'builder' user can edit the cloned files.
             return Process::timeout(150)->run(['bash', '-lc',
-                'rm -rf '.escapeshellarg($dir).' && git clone -q '.escapeshellarg($remote).' '.escapeshellarg($dir)
+                'rm -rf '.escapeshellarg($dir)
+                .' && git clone -q '.escapeshellarg($tokenRemote).' '.escapeshellarg($dir)
+                .' && git -C '.escapeshellarg($dir).' remote set-url origin '.escapeshellarg($cleanRemote)
                 .' && chmod -R 0777 '.escapeshellarg($dir)])->successful();
         } catch (\Throwable $e) {
             Log::warning('cloneRepo failed', ['e' => $e->getMessage()]);
@@ -653,7 +693,7 @@ class DeployService
     {
         try {
             $owner = (string) config('overcloud.owner_phone');
-            $account = \App\Models\WhatsAppAccount::where('session_name', 'overcloud-bot')->first();
+            $account = WhatsAppAccount::where('session_name', 'overcloud-bot')->first();
             if ($owner && $account) {
                 $this->gateway->sendText($account->session_name, $owner.'@s.whatsapp.net', $message);
             }
