@@ -32,9 +32,21 @@ class PaymentController extends Controller
                 'created' => $p->created_at->diffForHumans(),
             ]);
 
+        $proposals = \App\Models\PaymentProposal::with('lead:id,name,phone,company')
+            ->orderByRaw("CASE status WHEN 'pending' THEN 0 ELSE 1 END")->latest()->get()
+            ->map(fn (\App\Models\PaymentProposal $p) => [
+                'id' => $p->id,
+                'client' => $p->lead?->company ?: ($p->lead?->name ?? $p->lead?->phone),
+                'proposal' => $p->proposal,
+                'status' => $p->status,
+                'created' => $p->created_at->diffForHumans(),
+            ]);
+
         return Inertia::render('payments/Index', [
             'requests' => $requests,
             'to_review' => $requests->where('status', PaymentStatus::ProofSubmitted->value)->count(),
+            'proposals' => $proposals,
+            'pending_proposals' => $proposals->where('status', 'pending')->count(),
         ]);
     }
 

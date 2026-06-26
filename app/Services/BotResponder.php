@@ -69,7 +69,7 @@ class BotResponder
             LeadStage::Spec => $this->onScope($conversation, $lead, $text),
             LeadStage::Negotiating => $this->onDemo($conversation, $lead, $text),
             LeadStage::Quoted => $this->onQuoted($conversation, $lead, $text),
-            LeadStage::Accepted, LeadStage::AwaitingPayment => $this->onAwaitingPayment($conversation, $lead, $isMedia),
+            LeadStage::Accepted, LeadStage::AwaitingPayment => $this->onAwaitingPayment($conversation, $lead, $isMedia, $text),
             LeadStage::Paid => $this->onGathering($conversation, $lead, $inbound, $text),
             LeadStage::InProduction, LeadStage::Delivered, LeadStage::Maintenance => $this->onProduction($conversation, $lead, $text),
             default => $this->send($conversation, $this->claudeOr($conversation,
@@ -110,12 +110,15 @@ class BotResponder
         if ($this->isYes($text)) {
             return $this->sendBankDetails($conversation, $lead);
         }
+        if ($this->looksLikePaymentProposal($text)) {
+            return $this->recordPaymentProposal($conversation, $lead, $text);
+        }
 
         return $this->send($conversation, $this->claudeOr($conversation,
             'Quedo al pendiente 🙌 Cuando me confirmes que la aprobamos, te paso los datos para el anticipo del 40% y arrancamos.'));
     }
 
-    private function onAwaitingPayment(Conversation $conversation, Lead $lead, bool $isMedia): ?Message
+    private function onAwaitingPayment(Conversation $conversation, Lead $lead, bool $isMedia, string $text = ''): ?Message
     {
         if ($isMedia) {
             $lead->update(['stage' => LeadStage::AwaitingPayment]);
@@ -124,10 +127,33 @@ class BotResponder
                 '¡Recibí tu comprobante! 🙌 Verifico tu pago y, en cuanto quede aprobado, te creo tu *grupo de proyecto* y arrancamos. 🚀');
         }
 
+        if ($this->looksLikePaymentProposal($text)) {
+            return $this->recordPaymentProposal($conversation, $lead, $text);
+        }
+
         // Don't robot-repeat: engage with whatever the client says (questions, extra details,
         // requirements) and only gently remind about the deposit proof.
         return $this->send($conversation, $this->claudeOr($conversation,
             'Lo anoto 🙌 Cuando tengas listo el *comprobante* del anticipo (foto o PDF), mándamelo y arrancamos. Cualquier otro detalle, aquí estoy.'));
+    }
+
+    /** Public: owner approved/rejected a payment proposal → tell the client and continue. */
+    public function resolveProposal(\App\Models\PaymentProposal $proposal, bool $approved, ?string $notes = null): void
+    {
+        $conversation = $proposal->conversation
+            ?? Conversation::where('lead_id', $proposal->lead_id)->where('is_group', false)->first();
+        if (! $conversation) {
+            return;
+        }
+        $note = $notes ? "\n\n".$notes : '';
+        if ($approved) {
+            $msg = '¡Buenas noticias! 🎉 Revisamos tu propuesta de pago y *sí podemos manejarla así*.'.$note
+                ."\n\nCuando gustes te paso los datos para hacer tu pago y arrancamos. 🙌";
+        } else {
+            $msg = '¡Gracias por tu paciencia! 🙏 Revisamos tu propuesta de pago y, por esta ocasión, no podríamos manejarla de esa forma.'.$note
+                ."\n\nLo que sí podemos hacer es el esquema estándar (anticipo y el resto en pagos). ¿Le entramos así? 🙌";
+        }
+        $this->send($conversation, $msg);
     }
 
     /** Public: after payment, ask the client for everything we need to build (Overcloud-branded). */
@@ -412,6 +438,38 @@ class BotResponder
     private function looksLikeChange(string $text): bool
     {
         return Str::contains($text, ['cambi', 'cámbi', 'agrega', 'añade', 'anade', 'quita', 'pon ', 'ponle', 'modific', 'color', 'logo', 'texto', 'precio', 'producto', 'foto', 'imagen', 'ajusta', 'mueve', 'actualiza', 'reemplaza', 'más grande', 'mas grande', 'más chico']);
+    }
+
+    /** Client proposing a different payment arrangement than the standard plan. */
+    private function looksLikePaymentProposal(string $text): bool
+    {
+        return Str::contains($text, [
+            'pago único', 'pago unico', 'sin mensualidad', 'sin pagar mensualidad', 'una sola exhibición', 'una exhibicion',
+            'puedo pagar', 'podría pagar', 'pagar todo', 'en vez de pagar', 'otra forma de pago', 'descuento', 'rebaja',
+            'a meses', 'en partes diferente', 'me das un', 'precio especial', 'no me alcanza', 'más barato', 'mas barato',
+        ]);
+    }
+
+    /** Record an alternative-payment proposal for the owner to approve/reject, and acknowledge. */
+    private function recordPaymentProposal(Conversation $conversation, Lead $lead, string $text): Message
+    {
+        \App\Models\PaymentProposal::firstOrCreate(
+            ['lead_id' => $lead->id, 'proposal' => $text, 'status' => 'pending'],
+            ['conversation_id' => $conversation->id],
+        );
+        // Alert the owner so they can decide in the panel.
+        try {
+            $owner = (string) config('overcloud.owner_phone');
+            if ($owner && $conversation->whatsappAccount) {
+                $who = $lead->company ?: ($lead->name ?: $conversation->contact_phone);
+                $this->gateway->sendText($conversation->whatsappAccount->session_name, $owner.'@s.whatsapp.net',
+                    "💳 *Propuesta de pago* de {$who}:\n\"".Str::limit($text, 120)."\"\n\nApruébala o recházala en el panel y el bot le avisa.");
+            }
+        } catch (\Throwable $e) {
+        }
+
+        return $this->send($conversation, $this->claudeOr($conversation,
+            '¡Gracias por proponerlo! 🙌 Déjame revisarlo con el equipo y te confirmo en breve si lo podemos manejar así. Lo estamos considerando. 👍'));
     }
 
     /** The message likely contains API keys/credentials the client is sharing. */

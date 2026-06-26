@@ -20,10 +20,27 @@ interface PaymentRequest {
   created: string
 }
 
+interface PaymentProposal {
+  id: number
+  client: string | null
+  proposal: string
+  status: string
+  created: string
+}
+
 const props = defineProps<{
   requests: PaymentRequest[]
   to_review: number
+  proposals: PaymentProposal[]
+  pending_proposals: number
 }>()
+
+function approveProposal(id: number): void {
+  router.post(`/payment-proposals/${id}/approve`, {}, { preserveScroll: true })
+}
+function rejectProposal(id: number): void {
+  router.post(`/payment-proposals/${id}/reject`, {}, { preserveScroll: true })
+}
 
 function statusClasses(status: string): string {
   switch (status) {
@@ -67,6 +84,34 @@ function reject(id: number): void {
       <Badge variant="secondary" class="rounded-full">
         {{ props.to_review }} por revisar
       </Badge>
+    </div>
+
+    <!-- Alternative payment proposals from clients -->
+    <div v-if="props.proposals.length > 0" class="flex flex-col gap-3">
+      <h2 class="text-sm font-semibold text-foreground flex items-center gap-2">
+        Propuestas de pago
+        <Badge variant="secondary" class="rounded-full">{{ props.pending_proposals }} pendientes</Badge>
+      </h2>
+      <Card v-for="p in props.proposals" :key="'prop-' + p.id" class="rounded-xl shadow-sm">
+        <CardHeader>
+          <div class="flex items-start justify-between gap-3">
+            <CardTitle class="text-base text-foreground">{{ p.client ?? 'Cliente' }}</CardTitle>
+            <Badge variant="outline" :class="statusClasses(p.status === 'approved' ? 'verified' : p.status === 'rejected' ? 'rejected' : 'proof_submitted')">
+              {{ p.status === 'approved' ? 'Aprobada' : p.status === 'rejected' ? 'Rechazada' : 'Pendiente' }}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <p class="text-sm text-foreground italic">“{{ p.proposal }}”</p>
+        </CardContent>
+        <CardFooter class="flex items-center justify-between gap-2">
+          <span class="text-xs text-muted-foreground">{{ p.created }}</span>
+          <div v-if="p.status === 'pending'" class="flex items-center gap-2">
+            <Button size="sm" @click="approveProposal(p.id)"><Check class="size-4" /> Aprobar</Button>
+            <Button size="sm" variant="outline" @click="rejectProposal(p.id)"><X class="size-4" /> Rechazar</Button>
+          </div>
+        </CardFooter>
+      </Card>
     </div>
 
     <div v-if="props.requests.length === 0" class="rounded-xl border border-border bg-card text-muted-foreground text-sm p-8 text-center shadow-sm">

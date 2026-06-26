@@ -50,6 +50,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('payments', [PaymentController::class, 'index'])->name('payments.index');
     Route::post('payments/{payment}/verify', [PaymentController::class, 'verify'])->name('payments.verify');
     Route::post('payments/{payment}/reject', [PaymentController::class, 'reject'])->name('payments.reject');
+    // Alternative payment proposals: owner approves/rejects, the bot tells the client.
+    Route::post('payment-proposals/{proposal}/approve', [\App\Http\Controllers\PaymentProposalController::class, 'approve'])->name('proposals.approve');
+    Route::post('payment-proposals/{proposal}/reject', [\App\Http\Controllers\PaymentProposalController::class, 'reject'])->name('proposals.reject');
 
     // Catalog / settings
     Route::get('catalog', [CatalogController::class, 'index'])->name('catalog.index');
