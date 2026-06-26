@@ -10,3 +10,6 @@ Artisan::command('inspire', function () {
 
 // Daily billing run: reminders, pause overdue projects, monthly maintenance.
 Schedule::command('payments:dunning')->dailyAt('09:00')->timezone('America/Mexico_City')->withoutOverlapping();
+
+// Continuously watch every bot conversation for spam loops / stuck clients.
+Schedule::command('bot:monitor')->everyMinute()->withoutOverlapping();

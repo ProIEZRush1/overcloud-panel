@@ -82,7 +82,15 @@ class SpecBuilder
         $chat = $conv?->messages()->where('is_from_me', false)->latest()->take(12)->get()
             ->reverse()->pluck('body')->filter()->implode("\n") ?? '';
 
-        return trim(($lead->summary ? 'Resumen: '.$lead->summary."\n\n" : '').$chat)
+        // Fold in any reference sites the client shared, so the scope builds on them.
+        $refs = null;
+        try {
+            $refs = app(ReferenceFetcher::class)->digestForLead($lead);
+        } catch (\Throwable $e) {
+        }
+
+        return trim(($lead->summary ? 'Resumen: '.$lead->summary."\n\n" : '').$chat
+            .($refs ? "\n\nSitios de referencia que compartió el cliente (tómalos como base):\n".$refs : ''))
             ?: ($lead->summary ?: 'Proyecto profesional a la medida.');
     }
 
