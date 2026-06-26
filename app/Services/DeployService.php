@@ -174,7 +174,10 @@ class DeployService
             }
         }
 
-        return $url;
+        // Never confirmed live → don't hand the client a dead link; alert the owner instead.
+        $this->alertOwner('🎨 El demo de "'.($lead->company ?: $lead->name).'" se construyó pero no confirmó en línea ('.$url.'). Revísalo.');
+
+        return null;
     }
 
     /** Apps -> Flutter Web; sites -> default (Laravel+Vue). Explicit brief.stack wins. */
