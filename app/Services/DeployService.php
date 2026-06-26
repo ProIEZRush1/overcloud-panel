@@ -403,11 +403,20 @@ class DeployService
     {
         $fqdn = $sub.'.'.$c['base_domain'];
         try {
-            // Idempotent: if the record already exists (e.g. reserved earlier), treat as success.
             $existing = Http::withToken($c['cloudflare_token'])->timeout(15)
                 ->get("https://api.cloudflare.com/client/v4/zones/{$c['cloudflare_zone']}/dns_records", ['name' => $fqdn])
                 ->json('result');
+            // If it exists but points at a different server, UPDATE it to the current deploy IP
+            // (otherwise the domain serves from the wrong server → 503).
             if (! empty($existing)) {
+                $rec = $existing[0];
+                if (($rec['content'] ?? '') !== $c['server_ip'] || ($rec['proxied'] ?? null) !== true) {
+                    Http::withToken($c['cloudflare_token'])->timeout(20)
+                        ->patch("https://api.cloudflare.com/client/v4/zones/{$c['cloudflare_zone']}/dns_records/{$rec['id']}", [
+                            'content' => $c['server_ip'], 'proxied' => true, 'ttl' => 1,
+                        ]);
+                }
+
                 return true;
             }
 
