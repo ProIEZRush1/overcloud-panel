@@ -14,22 +14,35 @@ php artisan storage:link || true
 php artisan cache:clear || true
 php artisan config:cache
 
-# Claude Code subscription credentials for the AI worker (written from env, never baked).
-if [ -n "$CLAUDE_CREDS_JSON" ]; then
-  mkdir -p /root/.claude
-  printf '%s' "$CLAUDE_CREDS_JSON" > /root/.claude/.credentials.json
-  chmod 600 /root/.claude/.credentials.json
-  echo "claude credentials written"
-fi
-
 # Non-root 'builder' user for headless Claude Code (it refuses --dangerously-skip-permissions as root).
 if ! id builder >/dev/null 2>&1; then useradd -m builder 2>/dev/null || adduser -D -h /home/builder builder 2>/dev/null || true; fi
-if [ -n "$CLAUDE_CREDS_JSON" ] && id builder >/dev/null 2>&1; then
-  mkdir -p /home/builder/.claude
-  printf '%s' "$CLAUDE_CREDS_JSON" > /home/builder/.claude/.credentials.json
-  chmod 600 /home/builder/.claude/.credentials.json
-  chown -R builder /home/builder 2>/dev/null || true
-fi
+
+# Claude Code subscription credentials. The CLI auto-refreshes the OAuth token in this file,
+# so /home/builder/.claude is a PERSISTENT volume — only (re)seed from env when the stored
+# token is missing or already expired, otherwise we'd clobber the live refreshed token on
+# every restart and the bot would log out every few hours.
+seed_creds() {
+  dir="$1"; owner="$2"
+  mkdir -p "$dir"
+  file="$dir/.credentials.json"
+  need_seed=1
+  if [ -s "$file" ]; then
+    # Keep the existing (live, CLI-refreshed) file unless its token already expired.
+    exp=$(php -r '$j=json_decode(@file_get_contents($argv[1]),true); echo (int)(($j["claudeAiOauth"]["expiresAt"]??0)/1000);' "$file" 2>/dev/null || echo 0)
+    now=$(date +%s)
+    if [ "${exp:-0}" -gt "$now" ]; then need_seed=0; fi
+  fi
+  if [ "$need_seed" = "1" ] && [ -n "$CLAUDE_CREDS_JSON" ]; then
+    printf '%s' "$CLAUDE_CREDS_JSON" > "$file"
+    chmod 600 "$file"
+    echo "claude credentials seeded into $dir"
+  else
+    echo "claude credentials kept (live token) in $dir"
+  fi
+  [ -n "$owner" ] && chown -R "$owner" "$dir" 2>/dev/null || true
+}
+seed_creds /root/.claude ""
+seed_creds /home/builder/.claude builder
 mkdir -p storage/builds && chmod 777 storage/builds
 
 # Workers: a fast lane for bot replies, a separate slow lane for site deploys.
