@@ -71,7 +71,9 @@ class BotResponder
             LeadStage::Quoted => $this->onQuoted($conversation, $lead, $text),
             LeadStage::Accepted, LeadStage::AwaitingPayment => $this->onAwaitingPayment($conversation, $lead, $isMedia, $text),
             LeadStage::Paid => $this->onGathering($conversation, $lead, $inbound, $text),
-            LeadStage::InProduction, LeadStage::Delivered, LeadStage::Maintenance => $this->onProduction($conversation, $lead, $text),
+            LeadStage::InProduction, LeadStage::Delivered, LeadStage::Maintenance, LeadStage::Review => $this->onProduction($conversation, $lead, $text),
+            LeadStage::Lost => $this->send($conversation, $this->claudeOr($conversation,
+                '¡Qué gusto saludarte de nuevo! 🙌 ¿Retomamos tu proyecto? Cuéntame qué necesitas y seguimos.')),
             default => $this->send($conversation, $this->claudeOr($conversation,
                 'Tu proyecto ya está en marcha ✅ Cualquier cambio o duda lo vemos por aquí o en tu grupo. 🙌')),
         };
@@ -453,14 +455,21 @@ class BotResponder
     /** Record an alternative-payment proposal for the owner to approve/reject, and acknowledge. */
     private function recordPaymentProposal(Conversation $conversation, Lead $lead, string $text): Message
     {
-        \App\Models\PaymentProposal::firstOrCreate(
-            ['lead_id' => $lead->id, 'proposal' => $text, 'status' => 'pending'],
-            ['conversation_id' => $conversation->id],
-        );
-        // Alert the owner so they can decide in the panel.
+        // One pending proposal per lead — update its text instead of piling up duplicates.
+        $existing = \App\Models\PaymentProposal::where('lead_id', $lead->id)->where('status', 'pending')->first();
+        if ($existing) {
+            $existing->update(['proposal' => $text, 'conversation_id' => $conversation->id]);
+        } else {
+            \App\Models\PaymentProposal::create([
+                'lead_id' => $lead->id, 'conversation_id' => $conversation->id,
+                'proposal' => $text, 'status' => 'pending',
+            ]);
+        }
+        // Alert the owner at most once per hour per lead (don't spam them).
         try {
             $owner = (string) config('overcloud.owner_phone');
-            if ($owner && $conversation->whatsappAccount) {
+            if ($owner && $conversation->whatsappAccount
+                && \Illuminate\Support\Facades\Cache::add('proposal-alert:'.$lead->id, 1, now()->addHour())) {
                 $who = $lead->company ?: ($lead->name ?: $conversation->contact_phone);
                 $this->gateway->sendText($conversation->whatsappAccount->session_name, $owner.'@s.whatsapp.net',
                     "💳 *Propuesta de pago* de {$who}:\n\"".Str::limit($text, 120)."\"\n\nApruébala o recházala en el panel y el bot le avisa.");

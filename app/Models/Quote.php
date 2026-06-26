@@ -80,7 +80,7 @@ class Quote extends Model
         $this->subtotal_cents = $subtotal;
         $this->discount_cents = $discount;
         $this->total_cents = $total;
-        $this->deposit_cents = intdiv($total * $this->deposit_percent, 100);
+        $this->deposit_cents = $total > 0 ? max(1, (int) round($total * $this->deposit_percent / 100)) : 0;
 
         return $this;
     }

@@ -61,9 +61,11 @@ class PaymentController extends Controller
         }
 
         try {
-            if ($payment->type === \App\Enums\PaymentType::Deposit && $payment->quote) {
-                // Deposit verified → spin up the project; the bot asks the client for what it
-                // needs (content, accesses, or "do it all for me") before building.
+            // Deposit OR full upfront payment → spin up the project and start gathering.
+            if (in_array($payment->type, [\App\Enums\PaymentType::Deposit, \App\Enums\PaymentType::Full], true) && $payment->quote) {
+                if ($payment->type === \App\Enums\PaymentType::Full) {
+                    $payment->lead?->update(['stage' => \App\Enums\LeadStage::Paid]);
+                }
                 $project = app(ProjectService::class)->provisionFromQuote($payment->quote);
 
                 if (config('overcloud.deploy.enabled')) {

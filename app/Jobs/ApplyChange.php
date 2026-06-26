@@ -47,6 +47,9 @@ class ApplyChange implements ShouldQueue
         if ($ok && $conv && $account) {
             $gateway->sendText($account->session_name, $conv->contact_jid,
                 "¡Listo! ✅ Ya apliqué el cambio en tu sitio:\n{$project->prod_url}\n\n¿Algo más en lo que te ayude? 🙌");
+        } elseif (! $ok) {
+            // Alert the OWNER (not the client) so a human can apply the change.
+            $deploy->alertOwner('🔧 No se pudo aplicar el cambio de "'.($project->name ?: $project->id).'": "'.$this->instruction.'". Hazlo manual.');
         }
     }
 }

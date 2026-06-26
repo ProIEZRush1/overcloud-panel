@@ -637,11 +637,26 @@ class DeployService
 
     private function fail(Project $project, string $why): ?string
     {
-        // Never tell the client about errors — only progress. The owner is alerted separately.
+        // Never tell the client about errors — only progress. Alert the OWNER instead.
         $project->update(['status' => ProjectStatus::Review]);
         Log::error('Autodeploy failed', ['project' => $project->id, 'why' => $why]);
+        $this->alertOwner('🚧 Falló el despliegue de "'.$this->projectLabel($project).'" — '.$why.'. Revísalo en el panel.');
 
         return null;
+    }
+
+    /** Notify the owner (never the client) about a build/deploy problem. */
+    public function alertOwner(string $message): void
+    {
+        try {
+            $owner = (string) config('overcloud.owner_phone');
+            $account = \App\Models\WhatsAppAccount::where('session_name', 'overcloud-bot')->first();
+            if ($owner && $account) {
+                $this->gateway->sendText($account->session_name, $owner.'@s.whatsapp.net', $message);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('alertOwner failed', ['e' => $e->getMessage()]);
+        }
     }
 
     private function extractJson(?string $s): ?string
