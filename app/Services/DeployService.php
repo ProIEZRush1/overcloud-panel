@@ -79,7 +79,10 @@ class DeployService
         } else {
             $slug = Str::slug($project->lead?->company ?: $project->lead?->name ?: 'sitio');
             $this->removeStaleApps($c, $slug.'-', $name);
-            [$uuid, $url] = $this->createApp($c, $name, $stack['port']);
+            // A custom (agentic) build always serves a static site on 8080 (per AgentBuildService's
+            // Dockerfile); only template builds use the stack's own port. Mismatch here = 502.
+            $port = $custom ? '8080' : $stack['port'];
+            [$uuid, $url] = $this->createApp($c, $name, $port);
         }
         if (! $uuid) {
             return $this->fail($project, 'no se pudo crear la app en Coolify');
