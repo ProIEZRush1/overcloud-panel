@@ -97,12 +97,18 @@ class ProjectService
                 ]
             );
 
-            $welcome = "¡Bienvenidos a su grupo de proyecto en *Overcloud*! 🚀\n\n"
-                ."Aquí coordinamos *{$subject}*. Escriban cualquier cambio, duda o material y lo atendemos por aquí. "
-                .'Los ajustes dentro del alcance acordado son sin costo; si algo se sale del alcance, les enviamos una cotización antes de hacerlo. ✨';
-            $this->gateway->sendText($account->session_name, $jid, $welcome);
+            // Always add the OWNER directly (they control the account, so the add isn't blocked).
+            if ($owner) {
+                try {
+                    $this->gateway->updateParticipants($account->session_name, $jid, [$owner], 'add');
+                } catch (\Throwable $e) {
+                    // not fatal — the invite link below is the fallback
+                }
+            }
 
-            // Send the join link to the client (and owner) so they join themselves.
+            // Send the join LINK to the client (WhatsApp blocks adding non-contacts directly), and to
+            // the owner as a fallback. The welcome message is sent by the group-event handler when each
+            // real member actually joins — so they actually see it (pre-join messages are hidden).
             $invite = $this->gateway->groupInvite($account->session_name, $jid);
             if ($invite) {
                 if ($clientJid) {

@@ -8,4 +8,5 @@ Route::middleware('gateway')->prefix('wa')->group(function () {
     Route::post('inbound', [WhatsAppWebhookController::class, 'inbound']);
     Route::post('status', [WhatsAppWebhookController::class, 'status']);
     Route::post('receipt', [WhatsAppWebhookController::class, 'receipt']);
+    Route::post('group-event', [WhatsAppWebhookController::class, 'groupEvent']);
 });
