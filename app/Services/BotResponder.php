@@ -286,17 +286,21 @@ class BotResponder
 
         $text = Str::lower(trim($inbound->body ?? ''));
 
+        // It's a CHANGE when the AI says so OR the deterministic matcher does — but NEVER for a
+        // question (so "¿cómo abro?"/"¿qué IA usa?" are always answered, never auto-applied).
+        $isQuestion = Str::endsWith($text, '?') || Str::startsWith($text, ['¿', 'que ', 'qué ', 'como ', 'cómo ', 'cuando', 'cuándo', 'cuanto', 'cuánto', 'donde', 'dónde', 'por que', 'por qué', 'puedo ', 'se puede', 'podrias', 'podrías', 'podemos', 'cual', 'cuál', 'quien', 'quién']);
+        $wantsChange = ! $isQuestion && ($action === 'change' || $this->looksLikeChange($text));
+
         // A change captured from a VOICE NOTE is always confirmed before touching the live site.
-        if ($inbound->type === MessageType::Audio && ($action === 'change' || $this->looksLikeChange($text))) {
+        if ($inbound->type === MessageType::Audio && $wantsChange) {
             $conversation->setPendingChange(trim((string) $inbound->body));
 
             return $this->send($conversation,
                 "Entendí que quieres este cambio:\n«".trim((string) $inbound->body)."»\n\n¿Lo aplico a tu sistema? Respóndeme *sí* para confirmar. 🙌");
         }
 
-        // A real, actionable text change → dispatch it. (A question the AI mislabeled 'change' is NOT
-        // actionable via looksLikeChange, so it falls through to an answer below — never auto-applied.)
-        if ($action === 'change' && $this->looksLikeChange($text)) {
+        // A real, actionable text change → dispatch it.
+        if ($wantsChange) {
             return $this->dispatchConfirmedChange($conversation, $lead, trim((string) $inbound->body));
         }
 
