@@ -48,7 +48,13 @@ class DeployService
         $name = Str::slug(($project->lead?->company ?: $project->lead?->name ?: 'sitio')).'-'.Str::lower(Str::random(5));
         $label = $this->projectLabel($project);
 
-        $this->notify($project, "¡Manos a la obra! 🛠️ Empecé a construir {$label}. Te voy contando el avance por aquí. 🙌");
+        // Announce the build START to the client only ONCE per project — a retry or re-dispatch must
+        // never re-spam "¡Manos a la obra!" + the progress link (which looks broken to the client).
+        $announce = empty($project->brief['announced']);
+        if ($announce) {
+            $this->notify($project, "¡Manos a la obra! 🛠️ Empecé a construir {$label}. Te voy contando el avance por aquí. 🙌");
+            $project->update(['brief' => array_merge((array) ($project->brief ?? []), ['announced' => true])]);
+        }
 
         $content = $this->generateContent($project);
 
@@ -67,9 +73,10 @@ class DeployService
         }
 
         if ($fullstack) {
-            $this->reportProgress($project, 0,
-                "Estoy desarrollando {$label} como un *sistema completo* — con inicio de sesión, panel de administración y base de datos. 🛠️\n\n"
-                ."📺 Puedes ver el avance en vivo aquí:\n".$this->progressUrl($project));
+            $this->reportProgress($project, 0, $announce
+                ? "Estoy desarrollando {$label} como un *sistema completo* — con inicio de sesión, panel de administración y base de datos. 🛠️\n\n"
+                    ."📺 Puedes ver el avance en vivo aquí:\n".$this->progressUrl($project)
+                : null);
             if (! $this->agent->isAvailable() || ! $this->cloneRepo($c, $c['stacks']['laravel-vue']['repo'], $dir)) {
                 return $this->fail($project, 'no se pudo construir el sistema');
             }
@@ -82,7 +89,9 @@ class DeployService
                 return $this->fail($project, 'no se pudo crear el repositorio del sistema');
             }
         } elseif ($custom) {
-            $this->notify($project, "Estoy desarrollando {$label} a la medida — diseño, funciones y panel de administración. Esto toma unos minutos. ⚙️");
+            if ($announce) {
+                $this->notify($project, "Estoy desarrollando {$label} a la medida — diseño, funciones y panel de administración. Esto toma unos minutos. ⚙️");
+            }
             if (! $this->agent->isAvailable()
                 || ! $this->agent->build($project, $stackKey, $content, $dir)
                 || ! $this->createRepo($c, $name)
@@ -90,7 +99,9 @@ class DeployService
                 return $this->fail($project, 'no se pudo construir el proyecto a la medida');
             }
         } else {
-            $this->notify($project, "Estoy armando {$label} con tu diseño y contenido. 🎨");
+            if ($announce) {
+                $this->notify($project, "Estoy armando {$label} con tu diseño y contenido. 🎨");
+            }
             if (! $this->generateRepo($c, $stack['repo'], $name)) {
                 return $this->fail($project, 'no se pudo crear el repositorio');
             }
@@ -983,6 +994,16 @@ class DeployService
     {
         // Never tell the client about errors — only progress. Alert the OWNER instead.
         $project->update(['status' => ProjectStatus::Review]);
+        // Keep the live progress page honest (a soft "afinando" state) instead of frozen mid-build.
+        try {
+            $brief = (array) ($project->fresh()->brief ?? []);
+            if (! empty($brief['progress'])) {
+                $brief['progress']['failed'] = true;
+                $brief['progress']['updated_at'] = now()->toIso8601String();
+                $project->update(['brief' => $brief]);
+            }
+        } catch (\Throwable $e) {
+        }
         Log::error('Autodeploy failed', ['project' => $project->id, 'why' => $why]);
         $this->alertOwner('🚧 Falló el despliegue de "'.$this->projectLabel($project).'" — '.$why.'. Revísalo en el panel.');
 

@@ -36,7 +36,7 @@
     <div class="card">
         <div class="brand">Overcloud</div>
         <h1>{{ $title }}</h1>
-        <div class="sub">@if(!$done)<span class="pulse"></span>Construyendo tu sistema en tiempo real @else ¡Tu sistema está listo! 🎉 @endif</div>
+        <div class="sub">@if($done) ¡Tu sistema está listo! 🎉 @elseif($failed ?? false)<span class="pulse"></span>Estamos afinando un detalle — retomamos en un momento @else<span class="pulse"></span>Construyendo tu sistema en tiempo real @endif</div>
 
         <div class="bar"><div class="fill"></div></div>
 

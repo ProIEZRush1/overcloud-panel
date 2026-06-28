@@ -7,6 +7,7 @@ use App\Models\Project;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Str;
 
 /**
  * On-demand builder. Instead of a one-shot `claude -p`, it opens a full agentic
@@ -21,7 +22,52 @@ class AgentBuildService
     public function isAvailable(): bool
     {
         try {
-            return trim((string) Process::timeout(15)->run(['bash', '-lc', 'command -v claude'])->output()) !== '';
+            if (trim((string) Process::timeout(15)->run(['bash', '-lc', 'command -v claude'])->output()) === '') {
+                return false;
+            }
+
+            // The binary existing is not enough — the headless session (run as the builder user) must
+            // be LOGGED IN. A panel redeploy wipes the builder's home, so re-seed from the stored
+            // CLAUDE_CREDS_JSON snapshot if the session lapsed. This guarantees a build never starts
+            // doomed (which would burn ~25 min and deliver nothing).
+            return $this->ensureLoggedIn();
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /** True if the builder's `claude` answers; if not, re-seed creds from CLAUDE_CREDS_JSON and retry. */
+    private function ensureLoggedIn(): bool
+    {
+        $runAs = (string) config('overcloud.ai.run_as', 'builder');
+        $home = (string) config('overcloud.ai.home', '/home/builder');
+        if ($this->claudePings($runAs, $home)) {
+            return true;
+        }
+        $creds = (string) env('CLAUDE_CREDS_JSON', '');
+        if ($creds !== '') {
+            try {
+                File::ensureDirectoryExists($home.'/.claude');
+                File::put($home.'/.claude/.credentials.json', $creds);
+                @chmod($home.'/.claude/.credentials.json', 0600);
+                Process::timeout(15)->run(['chown', '-R', $runAs.':'.$runAs, $home.'/.claude']);
+                Log::warning('builder claude session lapsed — re-seeded from CLAUDE_CREDS_JSON');
+            } catch (\Throwable $e) {
+                Log::warning('builder creds re-seed failed', ['e' => $e->getMessage()]);
+            }
+        }
+
+        return $this->claudePings($runAs, $home);
+    }
+
+    private function claudePings(string $runAs, string $home): bool
+    {
+        try {
+            $r = Process::timeout(45)->run(['su', $runAs, '-c', "HOME={$home} claude -p 'responde solo: OK' 2>&1"]);
+            $out = Str::lower($r->output());
+
+            return $r->successful() && trim($out) !== ''
+                && ! str_contains($out, 'not logged in') && ! str_contains($out, 'please run /login');
         } catch (\Throwable $e) {
             return false;
         }

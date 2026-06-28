@@ -22,6 +22,7 @@ class ProgressController extends Controller
         ];
         $current = (int) ($progress['idx'] ?? 0);
         $done = (bool) ($progress['done'] ?? false) || $project->status?->value === 'live';
+        $failed = ! $done && (bool) ($progress['failed'] ?? false);
         $pct = $done ? 100 : (int) min(96, round(($current / max(1, count($steps) - 1)) * 100));
 
         return view('progress', [
@@ -30,6 +31,7 @@ class ProgressController extends Controller
             'steps' => $steps,
             'current' => $current,
             'done' => $done,
+            'failed' => $failed,
             'pct' => $pct,
             'url' => $done ? $project->prod_url : null,
             'brand' => [
