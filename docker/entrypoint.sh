@@ -25,13 +25,12 @@ seed_creds() {
   dir="$1"; owner="$2"
   mkdir -p "$dir"
   file="$dir/.credentials.json"
+  # Seed ONLY when the creds file is missing. If it already exists on the persistent volume we keep
+  # it untouched — the CLI auto-refreshes the OAuth token in place (the access token "looking
+  # expired" is normal; the refresh token renews it). Re-seeding from the static CLAUDE_CREDS_JSON
+  # snapshot would clobber the live, refreshed token and log the bot out every few hours.
   need_seed=1
-  if [ -s "$file" ]; then
-    # Keep the existing (live, CLI-refreshed) file unless its token already expired.
-    exp=$(php -r '$j=json_decode(@file_get_contents($argv[1]),true); echo (int)(($j["claudeAiOauth"]["expiresAt"]??0)/1000);' "$file" 2>/dev/null || echo 0)
-    now=$(date +%s)
-    if [ "${exp:-0}" -gt "$now" ]; then need_seed=0; fi
-  fi
+  [ -s "$file" ] && need_seed=0
   if [ "$need_seed" = "1" ] && [ -n "$CLAUDE_CREDS_JSON" ]; then
     printf '%s' "$CLAUDE_CREDS_JSON" > "$file"
     chmod 600 "$file"

@@ -36,18 +36,12 @@ class ClaudeCodeClient implements Assistant
             ."\n\nEscribe ÚNICAMENTE el texto de la próxima respuesta del Asistente "
             .'(sin prefijos como "Asistente:", sin comillas, sin explicaciones).';
 
-        $process = new Process(
-            [
-                config('overcloud.ai.bin'),
-                '-p', $prompt,
-                '--append-system-prompt', $system,
-                '--model', (string) config('overcloud.ai.model', 'sonnet'),
-            ],
-            base_path(),
-            $this->processEnv(),
-            null,
-            (float) config('overcloud.ai.timeout', 90),
-        );
+        $process = $this->buildProcess([
+            config('overcloud.ai.bin'),
+            '-p', $prompt,
+            '--append-system-prompt', $system,
+            '--model', (string) config('overcloud.ai.model', 'sonnet'),
+        ]);
 
         try {
             $process->run();
@@ -75,17 +69,11 @@ class ClaudeCodeClient implements Assistant
             return null;
         }
 
-        $process = new Process(
-            [
-                config('overcloud.ai.bin'),
-                '-p', $prompt,
-                '--model', (string) config('overcloud.ai.model', 'sonnet'),
-            ],
-            base_path(),
-            $this->processEnv(),
-            null,
-            (float) config('overcloud.ai.timeout', 120),
-        );
+        $process = $this->buildProcess([
+            config('overcloud.ai.bin'),
+            '-p', $prompt,
+            '--model', (string) config('overcloud.ai.model', 'sonnet'),
+        ]);
 
         try {
             $process->run();
@@ -102,6 +90,32 @@ class ClaudeCodeClient implements Assistant
 
             return null;
         }
+    }
+
+    /**
+     * Build the claude process. In production we run it as the non-root user that owns the
+     * PERSISTENT, auto-refreshing credentials volume (config ai.run_as + ai.home) so the OAuth
+     * token is refreshed in place and survives restarts/deploys — instead of the worker using an
+     * ephemeral ~/.claude re-seeded from a stale env snapshot (which silently logs the bot out).
+     * Locally (no run_as), it runs claude directly with the developer's own HOME.
+     */
+    private function buildProcess(array $args): Process
+    {
+        $timeout = (float) config('overcloud.ai.timeout', 120);
+        $runAs = (string) config('overcloud.ai.run_as');
+        $home = (string) config('overcloud.ai.home');
+
+        if ($runAs !== '') {
+            $cmd = 'cd '.escapeshellarg(base_path());
+            if ($home !== '') {
+                $cmd .= ' && export HOME='.escapeshellarg($home);
+            }
+            $cmd .= ' && '.implode(' ', array_map('escapeshellarg', $args));
+
+            return new Process(['su', $runAs, '-c', $cmd], base_path(), null, null, $timeout);
+        }
+
+        return new Process($args, base_path(), $this->processEnv(), null, $timeout);
     }
 
     /** Ensure HOME (for ~/.claude credentials) and PATH are present even under php-fpm. */

@@ -23,6 +23,10 @@ return [
         'whisper_url' => env('WHISPER_URL'),
         'openai_key' => env('OPENAI_API_KEY'),
         'transcribe_model' => env('TRANSCRIBE_MODEL', 'whisper-1'),
+        // Run the CLI as this non-root user (which owns the PERSISTENT, auto-refreshing ~/.claude
+        // creds volume) so the OAuth token is refreshed in place and survives deploys. Prod: builder.
+        'run_as' => env('CLAUDE_RUN_AS'),
+        'home' => env('CLAUDE_HOME'),
     ],
 
     'company' => [
