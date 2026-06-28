@@ -43,6 +43,21 @@ class AgentBuildService
             ."\n\nDiagnostica la causa, CORRIGE los archivos y verifica (PROTOCOLO DE VERIFICACIÓN de CLAUDE.md) que ya sirve bien.");
     }
 
+    /**
+     * Build a REAL Laravel + Vue (Inertia) app from the cloned template: the scope's modules become
+     * actual migrations/models/controllers + Inertia Vue pages behind login, with an admin panel and
+     * Postgres-backed (permanent) data. $admin = ['email'=>..,'password'=>..] is seeded.
+     */
+    public function buildFullstack(Project $project, string $dir, array $admin): bool
+    {
+        return $this->run($project->id, $dir, $this->context($project->lead, 'fullstack') + ['admin' => $admin],
+            'Esta carpeta YA es una app Laravel 13 + Inertia + Vue funcionando (con login/registro y base de datos). NO la rehagas desde cero: '
+            .'EXTIÉNDELA para convertirla en el sistema del cliente siguiendo CLAUDE.md. Implementa CADA módulo del alcance como funcionalidad REAL de Laravel: '
+            .'migración + modelo Eloquent + controlador + rutas protegidas por auth + páginas Inertia/Vue (resources/js/Pages) con tablas, formularios CRUD, búsqueda y filtros. '
+            .'Crea un PANEL DE ADMINISTRACIÓN (dashboard tras login) con navegación a todos los módulos. Los datos DEBEN guardarse en la base de datos (persistentes), NUNCA en localStorage. '
+            .'Siembra el usuario admin indicado en el DatabaseSeeder. Corre las migraciones, `npm run build`, y SIGUE EL PROTOCOLO DE VERIFICACIÓN: levanta la app, regístrate/inicia sesión y confirma que cada módulo guarda y lee datos reales. No termines hasta verificarlo.');
+    }
+
     /** Apply a client-requested change to an existing project checkout. */
     public function change(Project $project, string $dir, string $instruction): bool
     {
@@ -113,6 +128,11 @@ class AgentBuildService
     /** Write the project's CLAUDE.md: full context + brand/image rules + verification protocol. */
     private function writeContext(string $dir, array $ctx): void
     {
+        if (($ctx['mode'] ?? '') === 'fullstack') {
+            $this->writeFullstackContext($dir, $ctx);
+
+            return;
+        }
         $isChange = $ctx['mode'] === 'change';
         $feedbackBlock = ! empty($ctx['feedback'])
             ? "\n## Ajustes que pidió el cliente (OBLIGATORIO reflejarlos)\n- {$ctx['feedback']}\n"
@@ -154,6 +174,53 @@ class AgentBuildService
         {$verifyStep}
         5. Si algo falla, CORRÍGELO y vuelve a verificar. Repite hasta que TODO esté correcto.
         6. Al terminar, haz `kill` del servidor local. NO hagas git push ni despliegues.
+        MD;
+
+        File::put($dir.'/CLAUDE.md', $md);
+        @chmod($dir.'/CLAUDE.md', 0666);
+    }
+
+    /** CLAUDE.md for a REAL Laravel + Vue (Inertia) app: modules = migrations/models/controllers/Vue,
+     *  admin panel, login, Postgres-backed persistent data. */
+    private function writeFullstackContext(string $dir, array $ctx): void
+    {
+        $feedbackBlock = ! empty($ctx['feedback']) ? "\n## Ajustes pedidos por el cliente (OBLIGATORIO)\n- {$ctx['feedback']}\n" : '';
+        $email = $ctx['admin']['email'] ?? 'admin@overcloud.us';
+        $pass = $ctx['admin']['password'] ?? 'Overcloud2026';
+
+        $md = <<<MD
+        # Overcloud — sistema Laravel + Vue para {$ctx['business']}
+
+        Eres un **desarrollador senior full-stack de Overcloud**. Esta carpeta YA es una app **Laravel 13 + Inertia + Vue 3** funcionando, con **login/registro** y base de datos. Tu trabajo es **EXTENDERLA** (no rehacerla) para convertirla en el sistema real del cliente. NO TERMINAS hasta verificar —sirviendo la app, iniciando sesión y guardando datos reales— que cada módulo funciona.
+
+        ## Negocio
+        - **Nombre:** {$ctx['business']}
+        - **Necesidad:** {$ctx['need']}
+        - **Módulos del alcance (cada uno = funcionalidad REAL):**
+        - {$ctx['features']}
+        {$feedbackBlock}
+        ## Qué construir (OBLIGATORIO)
+        - Por CADA módulo: una **migración** (tablas reales), **modelo** Eloquent (con relaciones), **controlador** (CRUD), **rutas** protegidas con `auth`, y **páginas Inertia/Vue** en `resources/js/Pages/<Modulo>/` con tabla (listar, buscar, filtrar), formulario de crear/editar y borrar. Datos SIEMPRE en la base de datos (persistentes) — JAMÁS localStorage.
+        - Un **PANEL DE ADMINISTRACIÓN**: un dashboard tras login (`/dashboard`) con tarjetas/resumen y un menú lateral que enlaza a todos los módulos. Reusa el layout autenticado existente.
+        - Interconecta los módulos donde aplique (relaciones entre tablas; un registro se refleja en lo relacionado).
+        - **Usuario admin** sembrado en `database/seeders/DatabaseSeeder.php`: email `{$email}`, contraseña `{$pass}` (usa `User::factory()` o `User::updateOrCreate`, con `Hash::make`). El seeder debe ser idempotente.
+
+        ## Reglas de marca
+        - Español, profesional. En el pie o el menú: "Desarrollado por Overcloud". NUNCA menciones Claude, IA ni herramientas internas.
+
+        ## Técnico (IMPORTANTE para que despliegue)
+        - En producción la base de datos es **PostgreSQL** (inyectada por variables de entorno DB_*). NO cambies el `config/database.php`; Laravel ya lo lee del entorno. En local puedes usar el sqlite que ya viene para probar.
+        - Migraciones idempotentes y compatibles con Postgres (evita tipos solo-MySQL).
+        - Asegúrate de que `docker/start.sh` ejecute las migraciones y el seed al arrancar: debe incluir `php artisan migrate --force` y `php artisan db:seed --force` ANTES de `php artisan serve`. Si no están, agrégalos.
+        - Compila los assets: corre `npm install` (si hace falta) y **`npm run build`**, y deja el resultado committeado en `public/build`.
+
+        ## PROTOCOLO DE VERIFICACIÓN — NO termines sin completarlo
+        1. `composer install` (si falta) y `npm run build`. Corrige cualquier error de compilación de Vue.
+        2. Migra y siembra contra una BD de prueba: `php artisan migrate:fresh --seed` (usa el sqlite local). Debe correr sin errores.
+        3. Levanta la app: `php artisan serve --port 8099 >/tmp/srv.log 2>&1 &`.
+        4. Con curl confirma que `/` y `/login` responden 200. Inicia sesión por API/programáticamente o crea un test que: cree un registro en CADA módulo y lo lea de vuelta de la BD (Pest/PHPUnit), o usa `php artisan tinker` para `Modelo::create([...])` y `Modelo::count()`.
+        5. Confirma que el dashboard lista los módulos y que cada CRUD guarda en la BD (no en memoria/localStorage).
+        6. Si algo falla, CORRÍGELO y repite. Al terminar, `kill` del server local. NO hagas git push ni deploy.
         MD;
 
         File::put($dir.'/CLAUDE.md', $md);

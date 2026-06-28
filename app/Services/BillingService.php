@@ -51,8 +51,10 @@ class BillingService
 
         $admin = (array) (($project->brief['admin'] ?? []));
         $msg = "¡Tu proyecto ya está en línea! 🚀\n🌐 *Tu sistema:* {$project->prod_url}\n";
-        if (! empty($admin['url'])) {
-            $msg .= '🔐 *Panel de administración:* '.$admin['url'].' — usuario: '.($admin['user'] ?? '').' / contraseña: '.($admin['pass'] ?? '')."\n";
+        if (! empty($admin['email']) || ! empty($admin['user'])) {
+            $loginUrl = $admin['url'] ?? (rtrim((string) $project->prod_url, '/').'/login');
+            $msg .= "🔐 *Acceso a tu panel de administración:*\n   {$loginUrl}\n"
+                .'   Usuario: '.($admin['email'] ?? $admin['user']).' / Contraseña: '.($admin['password'] ?? $admin['pass'] ?? '')."\n";
         }
         // Always explain access + that the GROUP is the channel to customize and change the system.
         $msg .= "\n📲 Solo abre el enlace en cualquier navegador y ya es tu sistema funcionando.\n";

@@ -7,6 +7,7 @@ use App\Enums\ProjectStatus;
 use App\Models\Lead;
 use App\Models\Project;
 use App\Models\WhatsAppAccount;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
@@ -52,11 +53,32 @@ class DeployService
 
         $content = $this->generateContent($project);
 
-        // Hybrid: fast template path by default; escalate to an on-the-moment Claude
-        // Code build when the project is flagged custom or the stack has no starter.
-        $custom = $this->usesCustomBuild($project, $stack);
-        $dir = $custom ? storage_path('builds/'.$name) : null;
-        if ($custom) {
+        // Apps / SaaS → a REAL Laravel + Vue app (login, admin panel, Postgres-backed permanent data).
+        // Static/marketing sites keep the fast agentic/template path.
+        $fullstack = $this->usesFullstack($project);
+        $custom = ! $fullstack && $this->usesCustomBuild($project, $stack);
+        $dir = ($fullstack || $custom) ? storage_path('builds/'.$name) : null;
+        $admin = $fullstack ? $this->ensureAdminCreds($project) : [];
+
+        if ($fullstack) {
+            // Verify the Laravel+Vue app actually rendered (Inertia mount present) — not the Flutter
+            // markers pickStack would otherwise use, and not the business name (client-rendered).
+            $stackKey = 'laravel-vue';
+            $stack = ['kind' => 'app', 'markers' => ['id="app"'], 'port' => '8080'];
+        }
+
+        if ($fullstack) {
+            $this->notify($project, "Estoy desarrollando {$label} como un *sistema completo* — con inicio de sesión, panel de administración y base de datos. Esto toma varios minutos. ⚙️");
+            if (! $this->agent->isAvailable()
+                || ! $this->cloneRepo($c, $c['stacks']['laravel-vue']['repo'], $dir)
+                || ! $this->agent->buildFullstack($project, $dir, $admin)) {
+                return $this->fail($project, 'no se pudo construir el sistema');
+            }
+            $this->ensureMigrateOnStart($dir); // run migrations + seed on every boot (permanent Postgres)
+            if (! $this->createRepo($c, $name) || ! $this->pushDir($c, $dir, $name)) {
+                return $this->fail($project, 'no se pudo crear el repositorio del sistema');
+            }
+        } elseif ($custom) {
             $this->notify($project, "Estoy desarrollando {$label} a la medida — diseño, funciones y panel de administración. Esto toma unos minutos. ⚙️");
             if (! $this->agent->isAvailable()
                 || ! $this->agent->build($project, $stackKey, $content, $dir)
@@ -79,9 +101,9 @@ class DeployService
         } else {
             $slug = Str::slug($project->lead?->company ?: $project->lead?->name ?: 'sitio');
             $this->removeStaleApps($c, $slug.'-', $name);
-            // A custom (agentic) build always serves a static site on 8080 (per AgentBuildService's
-            // Dockerfile); only template builds use the stack's own port. Mismatch here = 502.
-            $port = $custom ? '8080' : $stack['port'];
+            // Custom static builds and the Laravel+Vue full-stack app both serve on 8080; only the
+            // light template build uses the stack's own port. Mismatch here = 502.
+            $port = ($fullstack || $custom) ? '8080' : $stack['port'];
             [$uuid, $url] = $this->createApp($c, $name, $port);
         }
         if (! $uuid) {
@@ -98,9 +120,6 @@ class DeployService
             'brief' => $brief,
         ]);
 
-        // Inject any credentials the client shared (Stripe, API keys, …) into the app env.
-        $this->applyEnv($c, $uuid, (array) ($brief['env'] ?? []));
-
         // Nice domain under overcloud.us (falls back to the default sslip.io if Cloudflare unset).
         // The subdomain is unique PER PROJECT (uuid suffix) so two clients with the same name
         // never share a URL — and stable across redeploys so a client's link never changes.
@@ -109,6 +128,28 @@ class DeployService
             $url = $nice;
             $project->update(['prod_url' => $url, 'domain' => $url]);
         }
+
+        // Inject env: client-shared credentials (Stripe, API keys…) + — for full-stack apps — a
+        // dedicated Postgres (permanent data) and the runtime config (APP_URL = final domain).
+        $env = (array) ($brief['env'] ?? []);
+        if ($fullstack) {
+            $db = (array) ($brief['db'] ?? []);
+            if (empty($db['DB_HOST'])) {
+                $db = $this->provisionDatabase($c, $name);
+                if (! empty($db['DB_HOST'])) {
+                    $brief['db'] = $db;
+                    $project->update(['brief' => $brief]);
+                }
+            }
+            $env = array_merge($env, $db, [
+                'APP_ENV' => 'production', 'APP_DEBUG' => 'false', 'APP_URL' => $url,
+            ]);
+            unset($env['DB_UUID']); // metadata for cleanup, not an app env var
+            // Record the admin login URL so the delivery message hands over real access.
+            $brief['admin'] = array_merge((array) ($brief['admin'] ?? []), ['url' => rtrim($url, '/').'/login']);
+            $project->update(['brief' => $brief]);
+        }
+        $this->applyEnv($c, $uuid, $env);
 
         $this->notify($project, "¡Ya casi! 🚀 Estoy publicando {$label} en línea y revisando que todo funcione bien...");
 
@@ -558,6 +599,100 @@ class DeployService
             ->get($c['coolify_url']."/deployments/{$depUuid}")->json('logs');
 
         return is_string($logs) ? $logs : (string) json_encode($logs);
+    }
+
+    /** Apps / SaaS / online stores → a REAL Laravel+Vue app (login, admin panel, Postgres data). */
+    private function usesFullstack(Project $project): bool
+    {
+        $brief = (array) ($project->brief ?? []);
+        if (array_key_exists('fullstack', $brief)) {
+            return (bool) $brief['fullstack'];
+        }
+
+        return in_array($project->lead?->service?->key, ['webapp', 'mobileapp', 'app', 'ecommerce'], true);
+    }
+
+    /** Generate (once) and persist the admin login for a full-stack app; returns ['email','password']. */
+    private function ensureAdminCreds(Project $project): array
+    {
+        $brief = (array) ($project->brief ?? []);
+        $admin = (array) ($brief['admin'] ?? []);
+        if (! empty($admin['email']) && ! empty($admin['password'])) {
+            return $admin;
+        }
+        $slug = Str::slug($project->lead?->company ?: $project->lead?->name ?: 'cliente');
+        $admin = [
+            'email' => ($slug ?: 'admin').'@'.config('overcloud.deploy.base_domain', 'overcloud.us'),
+            'password' => Str::password(12, true, true, false),
+            'url' => null,
+        ];
+        $brief['admin'] = $admin;
+        $project->update(['brief' => $brief]);
+
+        return $admin;
+    }
+
+    /**
+     * Make the Laravel app run migrations + seed (idempotent) on every container start, against the
+     * Coolify-injected Postgres env, before serving — so the schema + admin user always exist and
+     * data is permanent. Overwrites docker/start.sh with a known-good version.
+     */
+    private function ensureMigrateOnStart(string $dir): void
+    {
+        $start = <<<'SH'
+        #!/usr/bin/env sh
+        set -e
+        cd /app
+        [ -f .env ] || cp .env.production .env
+        grep -q "^APP_KEY=base64:" .env 2>/dev/null || php artisan key:generate --force
+        export APP_KEY="$(grep '^APP_KEY=' .env | head -1 | cut -d '=' -f2-)"
+        php artisan config:clear || true
+        # Wait briefly for the database, then migrate + seed (idempotent).
+        for i in $(seq 1 30); do php artisan migrate --force --no-interaction >/tmp/mig.log 2>&1 && break || sleep 2; done
+        php artisan db:seed --force --no-interaction >/tmp/seed.log 2>&1 || true
+        php artisan config:cache || true
+        exec php artisan serve --host 0.0.0.0 --port 8080
+        SH;
+        try {
+            File::ensureDirectoryExists($dir.'/docker');
+            File::put($dir.'/docker/start.sh', $start);
+            @chmod($dir.'/docker/start.sh', 0755);
+        } catch (\Throwable $e) {
+            Log::warning('ensureMigrateOnStart failed', ['e' => $e->getMessage()]);
+        }
+    }
+
+    /** Create a dedicated Postgres for this project and return its DB_* connection env (permanent data). */
+    private function provisionDatabase(array $c, string $name): array
+    {
+        try {
+            $r = Http::withToken($c['coolify_token'])->timeout(60)->post($c['coolify_url'].'/databases/postgresql', [
+                'project_uuid' => $c['coolify_project'], 'server_uuid' => $c['coolify_server'],
+                'environment_name' => 'production', 'name' => Str::limit($name, 40, '').'-db',
+                'postgres_db' => 'app', 'postgres_user' => 'app', 'instant_deploy' => true,
+            ]);
+            $u = $r->json('internal_db_url'); // postgres://user:pass@host:5432/db
+            if (! $u) {
+                Log::warning('provisionDatabase: no internal_db_url', ['status' => $r->status(), 'body' => mb_substr($r->body(), 0, 200)]);
+
+                return [];
+            }
+            $p = parse_url($u);
+
+            return [
+                'DB_CONNECTION' => 'pgsql',
+                'DB_HOST' => $p['host'] ?? '',
+                'DB_PORT' => (string) ($p['port'] ?? 5432),
+                'DB_DATABASE' => ltrim($p['path'] ?? '/app', '/') ?: 'app',
+                'DB_USERNAME' => rawurldecode($p['user'] ?? 'app'),
+                'DB_PASSWORD' => rawurldecode($p['pass'] ?? ''),
+                'DB_UUID' => (string) $r->json('uuid'),
+            ];
+        } catch (\Throwable $e) {
+            Log::warning('provisionDatabase failed', ['e' => $e->getMessage()]);
+
+            return [];
+        }
     }
 
     /** Escalate to an on-the-moment Claude Code build when flagged custom or no starter exists. */
