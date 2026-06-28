@@ -112,9 +112,16 @@ class AgentBuildService
         $this->writeContext($dir, $ctx);
 
         try {
+            // CRITICAL: scrub the panel's DB env from the agent's shell. The build runs inside the
+            // panel container, which exports DB_HOST/DB_DATABASE/… for the panel's OWN production
+            // Postgres. Without this, any `php artisan migrate`/`migrate:fresh` the agent runs would
+            // connect to and WIPE the panel's database. Force a throwaway local sqlite instead.
+            $scrub = 'unset DB_HOST DB_PORT DB_USERNAME DB_PASSWORD DB_URL DB_SOCKET; '
+                .'export DB_CONNECTION=sqlite DB_DATABASE='.escapeshellarg($dir.'/database/database.sqlite').'; '
+                .'mkdir -p '.escapeshellarg($dir.'/database').' && : > '.escapeshellarg($dir.'/database/database.sqlite').' 2>/dev/null || true; ';
             // Claude Code refuses --dangerously-skip-permissions as root, so run it as the
             // non-root 'builder' user. It auto-reads the CLAUDE.md we just wrote for full context.
-            $inner = 'cd '.escapeshellarg($dir).' && HOME=/home/builder claude -p '.escapeshellarg($task)
+            $inner = 'cd '.escapeshellarg($dir).' && '.$scrub.'HOME=/home/builder claude -p '.escapeshellarg($task)
                 .' --dangerously-skip-permissions --output-format json';
             $r = Process::timeout((int) config('overcloud.deploy.build_timeout', 1500))
                 ->run(['su', 'builder', '-c', $inner]);
