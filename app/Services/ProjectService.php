@@ -67,18 +67,15 @@ class ProjectService
         }
 
         $lead = $project->lead;
-        $clientPhone = $lead->phone ?: $lead->conversations()->where('is_group', false)->value('contact_phone');
+        $clientJid = $lead->conversations()->where('is_group', false)->value('contact_jid');
         $owner = (string) config('overcloud.company.owner_phone');
-        $participants = array_values(array_filter(array_unique([$clientPhone, $owner])));
-
-        if (empty($participants)) {
-            return;
-        }
-
         $subject = 'Overcloud · '.($lead->name ?? 'Cliente').' · '.($lead->service?->name ?? 'Proyecto');
 
         try {
-            $res = $this->gateway->createGroup($account->session_name, $subject, $participants);
+            // Create the group with NO participants. WhatsApp blocks DIRECTLY adding people who
+            // aren't the bot's contacts (account_reachout_restricted), so instead we create an empty
+            // group and send everyone a JOIN-BY-LINK invite, which is never blocked.
+            $res = $this->gateway->createGroup($account->session_name, $subject, []);
             $jid = $res['jid'] ?? null;
             if (! $jid) {
                 Log::warning('Group create returned no jid', ['project' => $project->id]);
@@ -87,15 +84,6 @@ class ProjectService
             }
 
             $project->update(['whatsapp_group_jid' => $jid]);
-
-            // Promote the client so they can add anyone they want.
-            if ($clientPhone) {
-                try {
-                    $this->gateway->updateParticipants($account->session_name, $jid, [$clientPhone], 'promote');
-                } catch (\Throwable $e) {
-                    // not fatal
-                }
-            }
 
             // The group thread where the bot answers change requests (ai_enabled).
             Conversation::updateOrCreate(
@@ -111,8 +99,23 @@ class ProjectService
 
             $welcome = "¡Bienvenidos a su grupo de proyecto en *Overcloud*! 🚀\n\n"
                 ."Aquí coordinamos *{$subject}*. Escriban cualquier cambio, duda o material y lo atendemos por aquí. "
-                ."Los ajustes dentro del alcance acordado son sin costo; si algo se sale del alcance, les enviamos una cotización antes de hacerlo. ✨";
+                .'Los ajustes dentro del alcance acordado son sin costo; si algo se sale del alcance, les enviamos una cotización antes de hacerlo. ✨';
             $this->gateway->sendText($account->session_name, $jid, $welcome);
+
+            // Send the join link to the client (and owner) so they join themselves.
+            $invite = $this->gateway->groupInvite($account->session_name, $jid);
+            if ($invite) {
+                if ($clientJid) {
+                    $this->gateway->sendText($account->session_name, $clientJid,
+                        "Te creé el *grupo de tu proyecto* 🚀 Únete aquí para que coordinemos todo por ahí:\n".$invite);
+                }
+                if ($owner) {
+                    $this->gateway->sendText($account->session_name, $owner.'@s.whatsapp.net',
+                        "Grupo de proyecto creado: {$subject}\nInvitación: ".$invite);
+                }
+            } else {
+                Log::warning('Group invite link unavailable', ['project' => $project->id, 'group' => $jid]);
+            }
         } catch (\Throwable $e) {
             Log::warning('Project group creation failed', ['project' => $project->id, 'e' => $e->getMessage()]);
         }

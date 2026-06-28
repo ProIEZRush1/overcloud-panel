@@ -114,6 +114,16 @@ class WhatsAppGateway
         ])->throw()->json();
     }
 
+    /** Get the join-by-link URL for a group (so members join themselves — avoids add-restrictions). */
+    public function groupInvite(string $session, string $groupJid): ?string
+    {
+        try {
+            return $this->client()->get("/sessions/{$session}/group/".urlencode($groupJid).'/invite')->json('url');
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
     public function sendPresence(string $session, string $to, string $type = 'composing'): void
     {
         $this->client()->post("/sessions/{$session}/presence", ['to' => $to, 'type' => $type]);
