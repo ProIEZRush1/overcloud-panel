@@ -7,7 +7,6 @@ use App\Enums\ProjectStatus;
 use App\Models\Lead;
 use App\Models\Project;
 use App\Models\WhatsAppAccount;
-use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
@@ -146,8 +145,12 @@ class DeployService
                     $project->update(['brief' => $brief]);
                 }
             }
+            $business = $project->lead?->company ?: ($project->lead?->name ?: 'Mi Negocio');
             $env = array_merge($env, $db, [
                 'APP_ENV' => 'production', 'APP_DEBUG' => 'false', 'APP_URL' => $url,
+                // Branded UI: the template's login/dashboard show the business name (config('app.name'))
+                // and https asset URLs behind the proxy.
+                'APP_NAME' => $business, 'ASSET_URL' => $url,
             ]);
             unset($env['DB_UUID']); // metadata for cleanup, not an app env var
             // Record the admin login URL so the delivery message hands over real access.
@@ -705,27 +708,10 @@ class DeployService
      */
     private function ensureMigrateOnStart(string $dir): void
     {
-        $start = <<<'SH'
-        #!/usr/bin/env sh
-        set -e
-        cd /app
-        [ -f .env ] || cp .env.production .env
-        grep -q "^APP_KEY=base64:" .env 2>/dev/null || php artisan key:generate --force
-        export APP_KEY="$(grep '^APP_KEY=' .env | head -1 | cut -d '=' -f2-)"
-        php artisan config:clear || true
-        # Wait briefly for the database, then migrate + seed (idempotent).
-        for i in $(seq 1 30); do php artisan migrate --force --no-interaction >/tmp/mig.log 2>&1 && break || sleep 2; done
-        php artisan db:seed --force --no-interaction >/tmp/seed.log 2>&1 || true
-        php artisan config:cache || true
-        exec php artisan serve --host 0.0.0.0 --port 8080
-        SH;
-        try {
-            File::ensureDirectoryExists($dir.'/docker');
-            File::put($dir.'/docker/start.sh', $start);
-            @chmod($dir.'/docker/start.sh', 0755);
-        } catch (\Throwable $e) {
-            Log::warning('ensureMigrateOnStart failed', ['e' => $e->getMessage()]);
-        }
+        // The client template ships its OWN production entrypoint (docker/start.sh): a resilient
+        // FrankenPHP boot that runs migrate + seed (best-effort, retrying in the background) before
+        // serving on 8080 and never crashes the container on a slow DB or a bad request. We must NOT
+        // overwrite it with a fragile `php artisan serve` script — trust the template's entrypoint.
     }
 
     /** Create a dedicated Postgres for this project and return its DB_* connection env (permanent data). */

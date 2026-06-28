@@ -197,49 +197,96 @@ class AgentBuildService
     }
 
     /** CLAUDE.md for a REAL Laravel + Vue (Inertia) app: modules = migrations/models/controllers/Vue,
-     *  admin panel, login, Postgres-backed persistent data. */
+     *  fully client-branded UI, admin panel, login, Postgres-backed persistent data, and a real
+     *  headless-browser end-to-end self-test the agent must pass before finishing. */
     private function writeFullstackContext(string $dir, array $ctx): void
     {
         $feedbackBlock = ! empty($ctx['feedback']) ? "\n## Ajustes pedidos por el cliente (OBLIGATORIO)\n- {$ctx['feedback']}\n" : '';
         $email = $ctx['admin']['email'] ?? 'admin@overcloud.us';
         $pass = $ctx['admin']['password'] ?? 'Overcloud2026';
+        $business = $ctx['business'];
+        // The agent will write APP_NAME into env files via this exact, shell-safe value.
+        $appName = $this->envSafe($business);
 
         $md = <<<MD
-        # Overcloud — sistema Laravel + Vue para {$ctx['business']}
+        # Overcloud — sistema Laravel + Vue **a la medida de {$business}**
 
-        Eres un **desarrollador senior full-stack de Overcloud**. Esta carpeta YA es una app **Laravel 13 + Inertia + Vue 3** funcionando, con **login/registro** y base de datos. Tu trabajo es **EXTENDERLA** (no rehacerla) para convertirla en el sistema real del cliente. NO TERMINAS hasta verificar —sirviendo la app, iniciando sesión y guardando datos reales— que cada módulo funciona.
+        Eres un **desarrollador senior full-stack de Overcloud**. Esta carpeta YA es una app **Laravel 13 + Inertia + Vue 3 + Tailwind** funcionando, con **login/registro**, layout autenticado y base de datos. Tu trabajo es **EXTENDERLA y PERSONALIZARLA POR COMPLETO** (no rehacerla) hasta que se vea y se sienta como un sistema hecho exclusivamente para **{$business}**. NO TERMINAS hasta que una **prueba de navegador headless real contra la app corriendo localmente** pase en verde, sola, sin ayuda humana.
+
+        ⚠️ **REGLA DE ORO:** cuando termines, NADA puede parecer un Laravel/Breeze genérico. Si en cualquier pantalla queda el logo de Laravel, el texto "You're logged in!", "Dashboard" pelón en inglés, Lorem ipsum, o el nombre "Laravel" en cualquier lado → el trabajo está MAL y debes corregirlo.
 
         ## Negocio
-        - **Nombre:** {$ctx['business']}
+        - **Nombre del negocio (cliente):** {$business}
         - **Necesidad:** {$ctx['need']}
         - **Módulos del alcance (cada uno = funcionalidad REAL):**
         - {$ctx['features']}
         {$feedbackBlock}
-        ## Qué construir (OBLIGATORIO)
-        - Por CADA módulo: una **migración** (tablas reales), **modelo** Eloquent (con relaciones), **controlador** (CRUD), **rutas** protegidas con `auth`, y **páginas Inertia/Vue** en `resources/js/Pages/<Modulo>/` con tabla (listar, buscar, filtrar), formulario de crear/editar y borrar. Datos SIEMPRE en la base de datos (persistentes) — JAMÁS localStorage.
-        - Un **PANEL DE ADMINISTRACIÓN**: un dashboard tras login (`/dashboard`) con tarjetas/resumen y un menú lateral que enlaza a todos los módulos. Reusa el layout autenticado existente.
-        - Interconecta los módulos donde aplique (relaciones entre tablas; un registro se refleja en lo relacionado).
-        - **Usuario admin** sembrado en `database/seeders/DatabaseSeeder.php`: email `{$email}`, contraseña `{$pass}` (usa `User::factory()` o `User::updateOrCreate`, con `Hash::make`). El seeder debe ser idempotente.
+        ## PASO 0 — EXPLORA antes de tocar (OBLIGATORIO)
+        Antes de escribir nada, lee la plantilla actual para respetar SUS convenciones (imports, props, layout):
+        - `resources/js/app.js` o `app.ts` (cómo se monta Inertia), `resources/js/Layouts/AuthenticatedLayout.vue`, `resources/js/Layouts/GuestLayout.vue`
+        - `resources/js/Pages/Auth/Login.vue` y `resources/js/Pages/Dashboard.vue`
+        - `resources/js/Components/ApplicationLogo.vue` (el logo "L" de Laravel — lo vas a REEMPLAZAR)
+        - `app/Http/Middleware/HandleInertiaRequests.php` (ya comparte `'name' => config('app.name')`, disponible en Vue como `\$page.props.name`)
+        - `routes/web.php`, `database/seeders/DatabaseSeeder.php`, `package.json`, `vite.config.*`
+        Tus archivos nuevos DEBEN compilar con ese mismo setup de Vite/Inertia/Breeze. No introduzcas librerías nuevas si la plantilla ya resuelve lo mismo.
 
-        ## Reglas de marca
-        - Español, profesional. En el pie o el menú: "Desarrollado por Overcloud". NUNCA menciones Claude, IA ni herramientas internas.
+        ## 1) PERSONALIZAR LA MARCA AL CLIENTE (OBLIGATORIO — esto es lo primero que verá el cliente)
+        - **APP_NAME = el nombre del negocio.** Escribe `APP_NAME="{$appName}"` en `.env` Y en `.env.production` (reemplaza la línea existente; no la dupliques), y cambia también el `'name' => env('APP_NAME', '…')` por defecto en `config/app.php` a `'{$appName}'` como respaldo. Así `config('app.name')` y `\$page.props.name` muestran "{$business}" en toda la app.
+        - **Usa el nombre del negocio en la UI vía `\$page.props.name`** (no lo hardcodees en cada vista): título del navbar, encabezado del dashboard, `<title>` de las páginas, y el mensaje de bienvenida del login.
+        - **ELIMINA el logo de Laravel.** Sobrescribe `resources/js/Components/ApplicationLogo.vue` por un **wordmark limpio**: el nombre del negocio (`\$page.props.name`) junto a una marca geométrica simple (un cuadrado/rombo redondeado o iniciales) pintada con el **degradado de marca**. PROHIBIDO el SVG del cubo "L" de Laravel en cualquier parte.
+        - **Tema visual (aplícalo en login, dashboard y layout autenticado):** moderno, profesional, dark-friendly. Degradado primario **#7c3aed → #c026d3** (morado a fucsia) para encabezados, botones primarios y el wordmark. Tarjetas `rounded-2xl`, sombras suaves (`shadow-lg`/`shadow-xl`), espaciado generoso, tipografía clara. Usa Tailwind (ya disponible). Botón primario sugerido: `bg-gradient-to-r from-[#7c3aed] to-[#c026d3] text-white rounded-xl px-4 py-2 shadow-lg hover:opacity-90`.
+        - **Login (`Pages/Auth/Login.vue`):** cabecera con el wordmark + un texto cálido en español tipo "Bienvenido a {$business}. Inicia sesión para administrar tu sistema." Labels y botones en español ("Correo", "Contraseña", "Recuérdame", "Iniciar sesión").
+        - **Dashboard (`Pages/Dashboard.vue`):** REEMPLAZA por completo el "You're logged in!" por un panel real en español: saludo con el nombre del negocio, y **una tarjeta-resumen por módulo** (ícono/emoji del giro + conteo real de registros traído del controlador + enlace "Ver / Administrar"). Nada de texto placeholder.
+        - **Navegación:** en `AuthenticatedLayout.vue` el menú (top o lateral) debe listar **TODOS los módulos del alcance** con etiquetas en español del giro del negocio (no "Items" genérico). Marca el activo.
+        - **TODO el texto visible en español**, tono cálido y profesional, redactado para el giro de {$business}. Crédito a Overcloud SOLO como nota pequeña en el pie ("Desarrollado por Overcloud"). NUNCA menciones Claude, IA ni herramientas internas.
 
-        ## Técnico (IMPORTANTE para que despliegue)
-        - En producción la base de datos es **PostgreSQL** (inyectada por variables de entorno DB_*). NO cambies el `config/database.php`; Laravel ya lo lee del entorno. En local puedes usar el sqlite que ya viene para probar.
-        - Migraciones idempotentes y compatibles con Postgres (evita tipos solo-MySQL).
-        - Asegúrate de que `docker/start.sh` ejecute las migraciones y el seed al arrancar: debe incluir `php artisan migrate --force` y `php artisan db:seed --force` ANTES de `php artisan serve`. Si no están, agrégalos.
-        - Compila los assets: corre `npm install` (si hace falta) y **`npm run build`**, y deja el resultado committeado en `public/build`.
+        ## 2) CONSTRUIR CADA MÓDULO COMO FUNCIONALIDAD REAL (OBLIGATORIO)
+        Por CADA módulo del alcance, todo conectado y persistente:
+        - **Migración** con columnas reales y apropiadas al giro (no una tabla genérica).
+        - **Modelo** Eloquent con `\$fillable` y relaciones donde aplique.
+        - **Controlador** con CRUD completo (`index`, `create`, `store`, `edit`, `update`, `destroy`) devolviendo respuestas Inertia.
+        - **Rutas** en `routes/web.php` protegidas con middleware `auth` (resource routes).
+        - **Páginas Inertia/Vue** en `resources/js/Pages/<Modulo>/` (`Index.vue` con tabla + búsqueda/filtro + botones, `Create.vue`/`Edit.vue` con formulario validado usando `useForm`). Estilo de marca.
+        - **Enlazado en la navegación** y reflejado en el dashboard.
+        - **Datos SIEMPRE en la base de datos** (persistentes). JAMÁS localStorage ni estado en memoria.
+        - Interconecta módulos donde tenga sentido (relaciones; un registro aparece en lo relacionado).
+        - **Usuario admin** idempotente en `database/seeders/DatabaseSeeder.php`: email `{$email}`, contraseña `{$pass}` (usa `User::updateOrCreate([...], [...'password' => Hash::make('{$pass}')])`). Siembra también algunos registros de ejemplo realistas del giro por módulo, para que el dashboard no se vea vacío.
 
-        ## PROTOCOLO DE VERIFICACIÓN — NO termines sin completarlo (déjalo PERFECTO)
-        1. `composer install` (si falta) y `npm run build`. Corrige CUALQUIER error de compilación de Vue/Inertia hasta que `npm run build` pase limpio.
-        2. Migra y siembra contra el sqlite local de prueba: `php artisan migrate:fresh --seed`. Debe correr SIN errores (migraciones compatibles con Postgres y SQLite).
-        3. **Pruebas Pest (e2e de backend) OBLIGATORIAS**: escribe en `tests/Feature/` una prueba por módulo que: (a) inicie sesión como el admin sembrado, (b) cree un registro vía el endpoint/controlador real, (c) lo lea de vuelta desde la base de datos, (d) confirme que persiste. Corre `php artisan test` y NO termines hasta que TODAS pasen.
-        4. **Prueba de NAVEGADOR (Playwright) OBLIGATORIA**: instálalo si falta (`composer require pestphp/pest-plugin-browser --dev --no-interaction` y `npx playwright install chromium`) y escribe en `tests/Browser/` una prueba que, en un navegador real contra la app servida localmente: abra `/login`, inicie sesión con el admin, navegue al dashboard y a cada módulo, **cree un registro por la interfaz**, recargue la página y **confirme que el dato sigue ahí** (persistencia real). Corre `php artisan test --filter=Browser` (o `./vendor/bin/pest tests/Browser`) y NO termines hasta que pase. Si el navegador no se puede instalar en este entorno, déjalo escrito y asegúrate de que las pruebas Pest del paso 3 cubran login + CRUD + persistencia de cada módulo.
-        5. Confirma que el dashboard lista TODOS los módulos y que cada CRUD guarda en la BD (NUNCA en memoria/localStorage).
-        6. Si algo falla, CORRÍGELO y repite los pasos hasta que TODO pase. Al terminar, `kill` de procesos locales. NO hagas git push ni deploy.
+        ## 3) BASE DE DATOS — SOLO SQLITE LOCAL (CRÍTICO)
+        - Este entorno ya está forzado a un **sqlite local** (`database/database.sqlite`) y se borraron las variables DB_* del panel. **JAMÁS** corras un comando de base de datos contra otra cosa que no sea ese sqlite local. NO te conectes a Postgres ni a ninguna BD remota, NO exportes DB_HOST/DB_*, NO uses `migrate:fresh` apuntando a otro lado.
+        - Migraciones **compatibles con Postgres Y SQLite** (evita tipos/funciones solo-MySQL; usa `json`, `decimal`, `string`, `text`, `timestamps`, etc.). En producción el harness inyecta Postgres y corre las migraciones al arrancar; tú solo validas en sqlite local. NO toques `config/database.php` salvo lo permitido arriba.
+
+        ## 4) COMPILAR ASSETS (OBLIGATORIO — la plantilla YA committea `public/build`)
+        - Corre `npm install` (si hace falta) y **`npm run build`** hasta que pase limpio. `public/build` debe quedar fresco y será committeado (ya NO está en `.gitignore`). Si modificaste cualquier `.vue`/`.js`/`.ts`, vuelve a correr `npm run build` antes de terminar para que el bundle desplegado refleje tus cambios.
+
+        ## PROTOCOLO DE AUTO-PRUEBA E2E — el bot se prueba a sí mismo (NO termines sin verde)
+        Debes levantar la app de verdad y manejar un **navegador headless real** contra ella. El entorno ya instala **Playwright + Chromium**. Hazlo así:
+
+        1. **Compila y prepara la BD local:** `composer install` (si falta) → `npm run build` (limpio) → `php artisan key:generate --force` → `php artisan migrate:fresh --seed` contra el **sqlite local** (debe correr sin errores).
+        2. **(Recomendado, bucle interno rápido) Pruebas Pest backend:** en `tests/Feature/`, una por módulo: inicia sesión como el admin, crea un registro por el controlador real, recárgalo desde la BD, confirma que persiste. `php artisan test` debe pasar.
+        3. **Levanta la app servida localmente:**
+           `php artisan serve --host 127.0.0.1 --port 8123 >/tmp/app.log 2>&1 &`
+           Espera a que responda (`curl -fs http://127.0.0.1:8123/login` con reintentos). Usa otro puerto si 8123 está ocupado.
+        4. **PRUEBA DE NAVEGADOR HEADLESS OBLIGATORIA (la verdadera puerta de salida):** asegúrate de tener el paquete npm `playwright` y el binario chromium (`npm i -D playwright >/dev/null 2>&1 || true`; `npx playwright install chromium`). Escribe un script autocontenido **`tests/e2e/smoke.mjs`** con `import { chromium } from 'playwright'` que, en chromium **headless** contra `http://127.0.0.1:8123`:
+           - abra `/login`, llene correo `{$email}` y contraseña `{$pass}`, envíe, y confirme que llega al dashboard (URL `/dashboard` y el nombre "{$business}" visible);
+           - por **CADA módulo**: navegue a su listado, use el botón de crear, **llene el formulario y guarde un registro por la INTERFAZ**, confirme que el nuevo registro aparece en la tabla;
+           - **recargue la página** (o navegue fuera y vuelva) y confirme que el registro **sigue ahí** (persistencia real en BD);
+           - ante cualquier fallo, lance error con contexto (`process.exit(1)`).
+           Córrelo con `node tests/e2e/smoke.mjs`. Debe salir con código 0.
+        5. **AUTO-REPARACIÓN hasta verde:** si el script falla, lee `/tmp/app.log` y `storage/logs/laravel.log`, diagnostica (ruta, validación, prop de Inertia, selector, migración, assets sin recompilar…), **corrige el código**, vuelve a `npm run build`, reinicia el server y **re-ejecuta `node tests/e2e/smoke.mjs`**. Repite hasta que pase en verde. Esta prueba debe pasar SIN intervención humana — es el bot probándose a sí mismo.
+        6. **Anti-genérico (revisión final manual con curl + el navegador):** confirma que NO aparece el logo de Laravel ni "You're logged in" ni "Laravel" en ninguna pantalla, que el nombre "{$business}" se muestra en login y dashboard, y que cada módulo está en el menú. `curl -s http://127.0.0.1:8123/login` y el HTML del dashboard NO deben contener "Laravel".
+        7. **Cierre:** confirma que `docker/start.sh`, las migraciones, el seed idempotente, `public/build` fresco y todos los archivos quedaron completos (sin TODOs). Haz `kill` de los procesos locales (server). NO hagas git push ni deploy — de eso se encarga el harness.
         MD;
 
         File::put($dir.'/CLAUDE.md', $md);
         @chmod($dir.'/CLAUDE.md', 0666);
+    }
+
+    /** Sanitize a business name for safe inclusion in an env value / config string (drops quotes/newlines). */
+    private function envSafe(string $value): string
+    {
+        $clean = preg_replace('/[\r\n"\\\\]+/', ' ', $value) ?? $value;
+
+        return trim(preg_replace('/\s+/', ' ', $clean) ?? $clean) ?: 'Sistema';
     }
 }
