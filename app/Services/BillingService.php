@@ -11,6 +11,7 @@ use App\Models\Project;
 use App\Support\Money;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 /**
@@ -49,11 +50,13 @@ class BillingService
         }
 
         $admin = (array) (($project->brief['admin'] ?? []));
-        $msg = "¡Tu proyecto ya está en línea! 🚀\n🌐 {$project->prod_url}\n";
+        $msg = "¡Tu proyecto ya está en línea! 🚀\n🌐 *Tu sistema:* {$project->prod_url}\n";
         if (! empty($admin['url'])) {
-            $msg .= '🔐 Panel de administración: '.$admin['url'].' — usuario: '.($admin['user'] ?? '').' / contraseña: '.($admin['pass'] ?? '')."\n";
+            $msg .= '🔐 *Panel de administración:* '.$admin['url'].' — usuario: '.($admin['user'] ?? '').' / contraseña: '.($admin['pass'] ?? '')."\n";
         }
-        $msg .= "\nRevísalo y mándame cualquier *cambio* por aquí, lo aplico al momento. 🙌\n";
+        // Always explain access + that the GROUP is the channel to customize and change the system.
+        $msg .= "\n📲 Solo abre el enlace en cualquier navegador y ya es tu sistema funcionando.\n";
+        $msg .= "🔧 Para *cambios, personalizaciones o nuevas funciones*, escríbeme en tu *grupo de proyecto* — justamente sirve para eso, mantenerlo y mejorarlo. Te paso un *documento con todos los detalles* de tu sistema. 📄\n";
         if ($comped) {
             $msg .= "\n💚 Este proyecto es una *cortesía*, totalmente sin costo. Disfrútalo y cuenta conmigo para lo que necesites.";
         } elseif ($pr) {
@@ -62,6 +65,22 @@ class BillingService
                 ."\n⏳ Tienes *7 días* para realizarlo y enviar tus cambios. Después de ese plazo pausamos el sitio hasta recibir el pago. 🙏";
         }
         $this->gateway->sendText($account->session_name, $conv->contact_jid, $msg);
+
+        // Attach the "Detalles de tu sistema" PDF (URL, qué incluye, cómo acceder y pedir cambios).
+        try {
+            $path = app(PdfService::class)->renderDelivery($project);
+            if (Storage::exists($path)) {
+                $this->gateway->sendMedia($account->session_name, $conv->contact_jid, [
+                    'base64' => base64_encode(Storage::get($path)),
+                    'mimetype' => 'application/pdf',
+                    'fileName' => 'Detalles de tu sistema.pdf',
+                    'kind' => 'document',
+                ]);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('delivery PDF failed', ['project' => $project->id, 'e' => $e->getMessage()]);
+        }
+
         $this->sync($pr);
     }
 

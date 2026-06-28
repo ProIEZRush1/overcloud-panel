@@ -2,13 +2,45 @@
 
 namespace App\Services;
 
+use App\Models\Project;
 use App\Models\Quote;
+use App\Models\Setting;
 use App\Models\Spec;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class PdfService
 {
+    /** Post-delivery "Detalles de tu sistema" doc: URL, qué incluye, cómo acceder y pedir cambios. */
+    public function renderDelivery(Project $project): string
+    {
+        $project->loadMissing('lead');
+        $spec = $project->lead?->specs()->latest('id')->first();
+        $features = collect($spec?->content['features'] ?? [])
+            ->map(fn ($f) => is_array($f) ? trim((string) ($f['name'] ?? '')) : (string) $f)
+            ->filter()->values()->all();
+        if (empty($features)) {
+            $features = collect((array) ($project->brief['requirements'] ?? []))
+                ->map(fn ($r) => Str::limit((string) $r, 90))->filter()->take(8)->values()->all();
+        }
+        $pdf = Pdf::loadView('pdf.delivery', [
+            'project' => $project,
+            'business' => $project->lead?->company ?: ($project->lead?->name ?: 'tu negocio'),
+            'url' => $project->prod_url,
+            'features' => $features,
+            'comped' => (bool) ($project->brief['comped'] ?? false),
+            'company' => config('overcloud.company.name'),
+            'brand' => $this->brand(),
+            'logo' => $this->logo(),
+        ])->setPaper('letter');
+
+        $path = "pdf/delivery/{$project->uuid}.pdf";
+        Storage::put($path, $pdf->output());
+
+        return $path;
+    }
+
     public function renderQuote(Quote $quote): string
     {
         $quote->loadMissing('lead', 'items', 'maintenancePlan');
@@ -48,8 +80,8 @@ class PdfService
     private function brand(): array
     {
         return [
-            'primary' => \App\Models\Setting::get('brand_primary', '#7c3aed'),
-            'accent' => \App\Models\Setting::get('brand_accent', '#c026d3'),
+            'primary' => Setting::get('brand_primary', '#7c3aed'),
+            'accent' => Setting::get('brand_accent', '#c026d3'),
         ];
     }
 
