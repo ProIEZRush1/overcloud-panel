@@ -54,6 +54,13 @@ class GenerateBotReply implements ShouldQueue
             return;
         }
 
+        // A reaction (👍) or empty/system event is NOT a message — never reply to it. (The gateway
+        // already filters these; this is defense in depth in case one slips through.)
+        if (blank($message->body) && blank($message->media_path) && blank($message->caption)
+            && ! in_array($message->type, [MessageType::Audio, MessageType::Image, MessageType::Document], true)) {
+            return;
+        }
+
         // Make the message readable: voice notes → text, images → description.
         $transcriber->transcribe($message);
         $vision->describe($message);

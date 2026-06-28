@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Contracts\Assistant;
+use App\Enums\ConversationStatus;
 use App\Enums\LeadStage;
 use App\Enums\MessageDirection;
 use App\Enums\MessageStatus;
@@ -84,6 +85,12 @@ class BotResponder
                 return $this->dispatchConfirmedChange($conversation, $lead, $pending);
             }
             $conversation->clearPendingChange();
+        }
+
+        // The client wants a real person / doesn't want a bot → hand them off to the owner (never
+        // lose them, never delete anything). This takes precedence over the "lost" close.
+        if ($this->wantsHuman($text)) {
+            return $this->handoffToOwner($conversation, $lead, $text);
         }
 
         // The client clearly lost interest / declined while still in the sales funnel → close it
@@ -774,15 +781,61 @@ class BotResponder
         return Str::contains($text, ['aprob', 'aprueb', 'acept', 'adelante', 'dale', 'sí', 'si,', 'claro', 'ok', 'okay', 'perfecto', 'me late', 'encant', 'me gusta', 'me fascina', 'genial', 'excelente', 'procede', 'proced', 'de acuerdo', 'va pues', 'hágale', 'hagale', 'confirm']);
     }
 
+    /** The client wants a real person / doesn't want to deal with a bot → hand off to a human. */
+    private function wantsHuman(string $text): bool
+    {
+        $text = ' '.trim($text).' ';
+
+        return (bool) preg_match('/(asesor real|un asesor|una asesora|atenci[oó]n humana|'
+            .'(hablar|hablo|comunicar|comunicarme|pasar|pasas?|p[aá]same|contactar|conectar|con[eé]ctame) con (un|una|alg[uú]ien|el|la)?\s*(humano|persona|asesor|asesora|agente|ejecutiv|alguien real|alguien|due[ñn]o|encargad)|'
+            .'quiero (un|una|hablar con|que me atienda un|que me atienda una)?\s*(humano|persona|asesor|asesora|agente|alguien real)|'
+            .'prefiero (un|una|hablar con|que me atienda)?\s*(humano|persona|asesor|asesora|agente|alguien)|'
+            .'no quiero (hablar con)?\s*(un|una)?\s*(bot|ia|robot|inteligencia artificial|asistente)|'
+            .'hablar con (un|una)?\s*(ia|bot|robot|inteligencia artificial)\s*no|'
+            .'no me (interes|gust)\w*\s*(hablar con\s*(un|una)?\s*)?(ia|bot|robot|asistente|inteligencia artificial))/u', $text);
+    }
+
+    /** Hand the client off to the OWNER: notify the owner, give the client the owner's WhatsApp, and
+     *  pause the bot so a human takes over. Never marks Lost, never deletes anything. */
+    private function handoffToOwner(Conversation $conversation, Lead $lead, string $reason): ?Message
+    {
+        $owner = (string) config('overcloud.company.owner_phone');
+        $who = $lead->company ?: ($lead->name ?: ($conversation->contact_phone ?? 'cliente'));
+        $meta = (array) ($conversation->meta ?? []);
+        $meta['handoff_to_human_at'] = now()->toIso8601String();
+        $meta['handoff_reason'] = Str::limit($reason, 160);
+        $conversation->meta = $meta;
+        $conversation->status = ConversationStatus::Human; // panel shows it needs a human
+        $conversation->ai_enabled = false;                  // pause the bot so the human takes over
+        $conversation->save();
+
+        // Alert the owner (best-effort, throttled once per hour per lead).
+        try {
+            if ($owner && $conversation->whatsappAccount
+                && Cache::add('handoff-alert:'.$lead->id, 1, now()->addHour())) {
+                $last = $conversation->messages()->where('is_from_me', false)->latest('id')->value('body');
+                $this->gateway->sendText($conversation->whatsappAccount->session_name, $owner.'@s.whatsapp.net',
+                    "👤 *Un cliente pidió un asesor* ({$who}). Toma la conversación — pausé el bot.\n\n"
+                    .'Tel: '.($conversation->contact_phone ?: 's/d')."\n💬 \"".Str::limit((string) $last, 100).'"');
+            }
+        } catch (\Throwable $e) {
+        }
+
+        $link = $owner ? 'https://wa.me/'.preg_replace('/\D/', '', $owner) : null;
+
+        return $this->send($conversation,
+            '¡Claro que sí! 🙌 Te paso con uno de nuestros asesores para que te atienda personalmente.'
+            .($link ? "\n\nEscríbele aquí directamente: {$link}" : '')
+            ."\nEn breve también te contactan. ¡Quedo al pendiente! 😊");
+    }
+
     /** Clear sign the client lost interest / declined for good (not a passing concern or a "no" mid-detail). */
     private function looksLost(string $text): bool
     {
         $text = ' '.trim($text).' ';
 
-        return (bool) preg_match('/\b(no me interes|ya no me interes|no estoy interesad|no me convenci[oó]|no es lo que (busco|necesito)|'
-            .'mejor (lo dejamos|no|déjalo|dejalo)|ya no (quiero|me interesa)|olv[ií]da(lo)?|no gracias|paso gracias|'
-            .'prefiero (un|una|hablar con un|hablar con una)\s*(humano|persona|asesor|agente|ejecutivo|alguien real)|'
-            .'hablar con (un|una)?\s*(ia|bot|robot|inteligencia artificial)\s*no|no quiero (un|hablar con)\s*(bot|ia|robot))\b/u', $text);
+        return (bool) preg_match('/\b(no me interes|ya no me interes|no estoy interesad|no me convenci|no es lo que (busco|necesito)|'
+            .'mejor (lo dejamos|déjalo|dejalo)|ya no (quiero|me interesa)|olv[ií]da|no gracias|paso gracias)/u', $text);
     }
 
     /** Gracefully close a lost lead: thank + leave the door open, mark Lost, free the demo, pause —
