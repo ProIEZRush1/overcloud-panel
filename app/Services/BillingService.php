@@ -38,9 +38,12 @@ class BillingService
             return;
         }
 
+        // Comped projects (e.g. a courtesy build) deliver the live site WITHOUT any charge or dunning.
+        $comped = (bool) ($project->brief['comped'] ?? false);
+
         $quote = $project->quote;
         $pr = null;
-        if ($quote) {
+        if ($quote && ! $comped) {
             $deploy = (int) round($quote->total_cents * 0.30);
             $pr = $this->payments->createBalance($quote, $project, 'Hito despliegue (30%) · '.$quote->number, $deploy, self::GRACE_DAYS);
         }
@@ -51,7 +54,9 @@ class BillingService
             $msg .= '🔐 Panel de administración: '.$admin['url'].' — usuario: '.($admin['user'] ?? '').' / contraseña: '.($admin['pass'] ?? '')."\n";
         }
         $msg .= "\nRevísalo y mándame cualquier *cambio* por aquí, lo aplico al momento. 🙌\n";
-        if ($pr) {
+        if ($comped) {
+            $msg .= "\n💚 Este proyecto es una *cortesía*, totalmente sin costo. Disfrútalo y cuenta conmigo para lo que necesites.";
+        } elseif ($pr) {
             $msg .= "\nPara continuar, el siguiente pago es el *30% del avance*: ".Money::format($pr->amount_cents, $pr->currency)."\n"
                 .$this->bankLines($pr)
                 ."\n⏳ Tienes *7 días* para realizarlo y enviar tus cambios. Después de ese plazo pausamos el sitio hasta recibir el pago. 🙏";
@@ -144,6 +149,10 @@ class BillingService
     {
         Project::whereNotNull('ready_at')->where('maintenance_active', true)->with(['quote', 'lead'])->get()
             ->each(function (Project $project) {
+                // Never bill a comped (courtesy) project.
+                if ((bool) ($project->brief['comped'] ?? false)) {
+                    return;
+                }
                 if ((int) ($project->quote?->maintenance_monthly_cents ?? 0) <= 0) {
                     return;
                 }
