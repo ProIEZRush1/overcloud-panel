@@ -1,6 +1,9 @@
 <?php
 
 return [
+    // When true, outbound WhatsApp sends are captured (not delivered) — used by the bot:e2e self-test.
+    'dry_run' => (bool) env('OVERCLOUD_DRY_RUN', false),
+
     // Node Baileys gateway (multi-number WhatsApp bridge)
     'gateway' => [
         'url' => env('WA_GATEWAY_URL', 'http://127.0.0.1:8088'),

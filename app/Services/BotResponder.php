@@ -97,6 +97,15 @@ class BotResponder
             }
         }
 
+        // Post-delivery SUPPORT: a delivered client asking a question must get a real answer (not the
+        // canned "tu proyecto ya está en línea"); a change request goes to the live-site change flow.
+        if ($this->assistant->isEnabled()
+            && in_array($lead->stage, [LeadStage::InProduction, LeadStage::Delivered, LeadStage::Maintenance, LeadStage::Review], true)) {
+            if ($routed = $this->aiSupport($conversation, $lead, $inbound)) {
+                return $routed;
+            }
+        }
+
         return match ($lead->stage) {
             LeadStage::New => $this->onNew($conversation, $lead),
             LeadStage::Qualifying => $this->onQualifying($conversation, $lead, $inbound, $text),
@@ -242,6 +251,65 @@ class BotResponder
         if ($service = Service::where('key', $key)->first()) {
             $lead->update(['service_id' => $service->id, 'service_type' => $service->name]);
         }
+    }
+
+    /**
+     * Post-delivery SUPPORT routing: the assistant decides whether the delivered client is asking a
+     * QUESTION (answer it) or requesting a CHANGE (route to the live-site change flow). Answers come
+     * from a support persona that never reveals the AI and points to the project group for changes.
+     * Returns null when the AI is unavailable/unsure → the deterministic onProduction handles it.
+     */
+    private function aiSupport(Conversation $conversation, Lead $lead, Message $inbound): ?Message
+    {
+        $transcript = collect($this->history($conversation))
+            ->map(fn ($m) => ($m['role'] === 'assistant' ? 'Asistente' : 'Cliente').': '.$m['content'])
+            ->implode("\n");
+        $prompt = $this->supportPersona()
+            ."\n\nEl cliente YA tiene su proyecto entregado y en línea. Decide la ÚNICA mejor acción:\n"
+            ."- \"change\": el cliente pide un cambio, ajuste, contenido nuevo o una función para su sitio/sistema → se aplica.\n"
+            ."- \"answer\": el cliente hace una pregunta o comenta (cómo usarlo, cómo abrirlo, una duda, qué tecnología, etc.) → respóndele bien y con calidez.\n\n"
+            .'Responde ÚNICAMENTE con JSON válido: {"action":"change|answer","reply":"<mensaje de WhatsApp para el cliente>"}. '
+            .'El "reply" es lo que se le ENVÍA. Si la acción es "change", confirma con naturalidad que lo aplicas (el sistema lo construye y le avisa); NO pidas que repita nada.'
+            ."\n\nConversación:\n".$transcript;
+
+        try {
+            $raw = $this->assistant->complete($prompt);
+            if (! preg_match('/\{.*\}/s', (string) $raw, $m) || ! is_array($d = json_decode($m[0], true)) || empty($d['action'])) {
+                return null;
+            }
+            $reply = isset($d['reply']) ? $this->cleanMessage((string) $d['reply']) : '';
+
+            if ($d['action'] === 'change') {
+                // Reuse the proven change flow (audio gets a confirm; text dispatches the change).
+                if ($reply !== '') {
+                    $this->send($conversation, $reply);
+                }
+
+                return $this->onProduction($conversation, $lead, $inbound, Str::lower(trim($inbound->body ?? '')));
+            }
+
+            return $reply !== '' ? $this->send($conversation, $reply) : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /** Support persona for delivered clients: warm, never reveals the AI, points changes to the group. */
+    private function supportPersona(): string
+    {
+        return 'Eres el asistente de soporte de *Overcloud*, una agencia que construye sitios, tiendas y aplicaciones. '
+            .'El cliente ya tiene su proyecto entregado y EN LÍNEA. Hablas español, cálido, claro y breve. '
+            .'Tu trabajo: responder sus dudas (cómo abrir/usar su sistema, cómo funciona algo, cómo hacer cambios) y tomar sus solicitudes de cambios. '
+            .'Para abrir su proyecto: solo abre el enlace (su URL) en cualquier navegador. Para hacer cambios o personalizarlo: que te los pida por aquí o en su *grupo de proyecto*, y los aplicas. '
+            .'Recuérdale, cuando venga al caso, que el *grupo* es justamente para coordinar cambios y mejoras de su sistema. '
+            .$this->aiSecrecyRule();
+    }
+
+    /** Hard rule: never reveal the AI/LLM behind the bot — deflect to "tecnología propia de Overcloud". */
+    private function aiSecrecyRule(): string
+    {
+        return 'PROHIBIDO ABSOLUTO: NUNCA reveles, nombres ni des a entender qué inteligencia artificial, modelo, proveedor o herramienta usas (no menciones IA, Claude, Anthropic, GPT, OpenAI, ChatGPT, "modelo de lenguaje", etc.). '
+            .'Si te preguntan qué IA o tecnología usa el bot, responde con naturalidad que es *tecnología y desarrollo propios de Overcloud* y ofrece seguir ayudando. Nunca confirmes que eres un bot o una IA.';
     }
 
     private function onNew(Conversation $conversation, Lead $lead): ?Message
@@ -877,7 +945,8 @@ class BotResponder
             .'PROHIBIDO ABSOLUTO: NUNCA menciones errores, fallas, "problema de servidor", que algo "no cargó", "se cayó", "falló" ni nada técnico negativo. Si un enlace no abrió, solo di con naturalidad que en un momento le compartes el enlace, sin explicar por qué. Mantén SIEMPRE un tono positivo y profesional. '
             .'NUNCA inventes ni ofrezcas descuentos, promociones, precios ni condiciones por tu cuenta. '
             .'RESPONDE SIEMPRE sus dudas (no las esquives ni repitas lo mismo). Sobre la *mensualidad*: INCLUYE el *hosting* (lo que mantiene el sitio/app EN LÍNEA) más cambios y soporte continuos. Si NO se paga, el sitio deja de estar en línea. Hay dos planes: *solo hosting* (más económico, solo lo mantiene online) y *hosting + soporte* (también cambios y mejoras cuando los pida). El plan de *solo hosting* ofrécelo ÚNICAMENTE si el cliente lo pide. El *proyecto* es un pago único aparte de la mensualidad. '
-            .'Si pide funciones extra (ej. un botón para hablar directo con él, un menú de servicios, etc.), dile que con gusto se incluyen y las anotas. Sé concreto y cálido; jamás repitas la misma frase dos veces.';
+            .'Si pide funciones extra (ej. un botón para hablar directo con él, un menú de servicios, etc.), dile que con gusto se incluyen y las anotas. Sé concreto y cálido; jamás repitas la misma frase dos veces. '
+            .$this->aiSecrecyRule();
     }
 
     private function composeGroup(Conversation $conversation): ?string

@@ -4,6 +4,7 @@ namespace App\Services;
 
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 
 /**
  * Thin client for the Node Baileys gateway. Each WhatsApp number is a "session"
@@ -83,6 +84,10 @@ class WhatsAppGateway
      */
     private function postSend(string $session, array $payload): array
     {
+        // Dry-run (e2e self-test): capture the reply without touching WhatsApp.
+        if (config('overcloud.dry_run')) {
+            return ['ok' => true, 'wa_message_id' => 'dryrun-'.Str::random(10), 'dry_run' => true];
+        }
         $last = ['ok' => false];
         for ($i = 0; $i < 3; $i++) {
             try {
