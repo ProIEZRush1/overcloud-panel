@@ -184,6 +184,31 @@ class DeployService
         return $this->fail($project, 'no pasó las pruebas tras varios intentos');
     }
 
+    /** Free a lost lead's demo: delete its Coolify app(s) and DNS record. Keeps the DB record intact. */
+    public function removeDemo(Lead $lead): void
+    {
+        if (! $this->isConfigured()) {
+            return;
+        }
+        $c = config('overcloud.deploy');
+        $slug = Str::slug($lead->company ?: $lead->name ?: 'sitio');
+        try {
+            // Delete every Coolify app for this lead's demo (name starts with "<slug>-demo-").
+            $apps = Http::withToken($c['coolify_token'])->timeout(20)->get($c['coolify_url'].'/applications')->json();
+            foreach ((is_array($apps) ? $apps : []) as $a) {
+                if (! empty($a['uuid']) && Str::startsWith($a['name'] ?? '', $slug.'-demo-')) {
+                    Http::withToken($c['coolify_token'])->timeout(25)
+                        ->delete($c['coolify_url']."/applications/{$a['uuid']}", ['delete_volumes' => true, 'delete_configurations' => true]);
+                    Log::info('removed lost demo app', ['lead' => $lead->id, 'name' => $a['name']]);
+                }
+            }
+            // Remove the demo DNS record so it doesn't dangle.
+            $this->deleteDns($c, $this->demoSubdomain($lead));
+        } catch (\Throwable $e) {
+            Log::warning('removeDemo failed', ['lead' => $lead->id, 'e' => $e->getMessage()]);
+        }
+    }
+
     /** Build + deploy a quick one-page visual demo for a lead (before the quote). Returns the live URL. */
     public function deployDemo(Lead $lead): ?string
     {
@@ -567,6 +592,28 @@ class DeployService
                 ])->json('success');
         } catch (\Throwable $e) {
             return false;
+        }
+    }
+
+    /** Delete a subdomain's Cloudflare A record (used when freeing a lost lead's demo). */
+    private function deleteDns(array $c, string $sub): void
+    {
+        if (empty($c['cloudflare_token']) || empty($c['cloudflare_zone'])) {
+            return;
+        }
+        $fqdn = $sub.'.'.$c['base_domain'];
+        try {
+            $existing = Http::withToken($c['cloudflare_token'])->timeout(15)
+                ->get("https://api.cloudflare.com/client/v4/zones/{$c['cloudflare_zone']}/dns_records", ['name' => $fqdn])
+                ->json('result');
+            foreach ((array) $existing as $rec) {
+                if (! empty($rec['id'])) {
+                    Http::withToken($c['cloudflare_token'])->timeout(15)
+                        ->delete("https://api.cloudflare.com/client/v4/zones/{$c['cloudflare_zone']}/dns_records/{$rec['id']}");
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning('deleteDns failed', ['fqdn' => $fqdn, 'e' => $e->getMessage()]);
         }
     }
 

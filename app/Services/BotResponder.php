@@ -12,6 +12,7 @@ use App\Enums\QuoteStatus;
 use App\Jobs\ApplyChange;
 use App\Jobs\BuildDemo;
 use App\Jobs\DeployProject;
+use App\Jobs\RemoveDemo;
 use App\Models\Conversation;
 use App\Models\Lead;
 use App\Models\Message;
@@ -83,6 +84,14 @@ class BotResponder
                 return $this->dispatchConfirmedChange($conversation, $lead, $pending);
             }
             $conversation->clearPendingChange();
+        }
+
+        // The client clearly lost interest / declined while still in the sales funnel → close it
+        // gracefully, mark the lead Lost, free their demo resources, and stop messaging — but KEEP
+        // the full record (lead + conversation) in the panel.
+        $activeSale = in_array($lead->stage, [LeadStage::Qualifying, LeadStage::Spec, LeadStage::Negotiating, LeadStage::Quoted, LeadStage::New], true);
+        if ($activeSale && $this->looksLost($text)) {
+            return $this->closeLost($conversation, $lead, $text);
         }
 
         // AI-driven routing for the SALES funnel: the assistant reads the whole conversation and
@@ -763,6 +772,36 @@ class BotResponder
         }
 
         return Str::contains($text, ['aprob', 'aprueb', 'acept', 'adelante', 'dale', 'sí', 'si,', 'claro', 'ok', 'okay', 'perfecto', 'me late', 'encant', 'me gusta', 'me fascina', 'genial', 'excelente', 'procede', 'proced', 'de acuerdo', 'va pues', 'hágale', 'hagale', 'confirm']);
+    }
+
+    /** Clear sign the client lost interest / declined for good (not a passing concern or a "no" mid-detail). */
+    private function looksLost(string $text): bool
+    {
+        $text = ' '.trim($text).' ';
+
+        return (bool) preg_match('/\b(no me interes|ya no me interes|no estoy interesad|no me convenci[oó]|no es lo que (busco|necesito)|'
+            .'mejor (lo dejamos|no|déjalo|dejalo)|ya no (quiero|me interesa)|olv[ií]da(lo)?|no gracias|paso gracias|'
+            .'prefiero (un|una|hablar con un|hablar con una)\s*(humano|persona|asesor|agente|ejecutivo|alguien real)|'
+            .'hablar con (un|una)?\s*(ia|bot|robot|inteligencia artificial)\s*no|no quiero (un|hablar con)\s*(bot|ia|robot))\b/u', $text);
+    }
+
+    /** Gracefully close a lost lead: thank + leave the door open, mark Lost, free the demo, pause —
+     *  but KEEP the lead + conversation as a record in the panel (with the reason). */
+    private function closeLost(Conversation $conversation, Lead $lead, string $reason): ?Message
+    {
+        $lead->update(['stage' => LeadStage::Lost]);
+        $meta = (array) ($conversation->meta ?? []);
+        $meta['lost_reason'] = Str::limit('Cliente no interesado: '.$reason, 180);
+        $meta['lost_at'] = now()->toIso8601String();
+        $conversation->meta = $meta;
+        $conversation->ai_enabled = false; // stop the bot, but keep the thread as a record
+        $conversation->save();
+
+        // Free the client's demo resources (Coolify app + DNS) in the background — keep the DB record.
+        RemoveDemo::dispatch($lead->id)->onQueue('deploy');
+
+        return $this->send($conversation,
+            '¡Gracias por tu tiempo! 🙏 Quedo a la orden por si más adelante cambias de opinión — aquí estaré con gusto. ¡Te deseo mucho éxito! 🙌');
     }
 
     /** True when the client likes it BUT wants changes/more info — not a clean yes. */
