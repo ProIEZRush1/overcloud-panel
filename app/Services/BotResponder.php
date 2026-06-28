@@ -85,6 +85,18 @@ class BotResponder
             $conversation->clearPendingChange();
         }
 
+        // AI-driven routing for the SALES funnel: the assistant reads the whole conversation and
+        // decides when to ADVANCE (prepare the alcance, build the demo, send the quote, pass payment
+        // data) vs simply answer a question — so it never promises a step the system doesn't take and
+        // isn't blocked by brittle keyword matching. Falls back to the deterministic handlers below
+        // whenever the AI is unavailable or unsure, so the funnel never breaks if Claude's creds lapse.
+        if ($this->assistant->isEnabled()
+            && in_array($lead->stage, [LeadStage::Qualifying, LeadStage::Spec, LeadStage::Negotiating, LeadStage::Quoted], true)) {
+            if ($routed = $this->aiRoute($conversation, $lead, $inbound)) {
+                return $routed;
+            }
+        }
+
         return match ($lead->stage) {
             LeadStage::New => $this->onNew($conversation, $lead),
             LeadStage::Qualifying => $this->onQualifying($conversation, $lead, $inbound, $text),
@@ -99,6 +111,137 @@ class BotResponder
             default => $this->send($conversation, $this->claudeOr($conversation,
                 'Tu proyecto ya está en marcha ✅ Cualquier cambio o duda lo vemos por aquí o en tu grupo. 🙌')),
         };
+    }
+
+    /** Stage → the actions the AI may choose, with guidance. Only SALES steps (never deploys/payments). */
+    private const FUNNEL_ACTIONS = [
+        'qualifying' => [
+            'advance' => 'Ya tienes una idea general de QUÉ tipo de proyecto quiere y para qué negocio (aunque falten detalles menores), o el cliente respondió tus preguntas → prepárale su *alcance* AHORA. No sigas preguntando de más.',
+            'ask' => 'Todavía NO tienes idea de qué tipo de proyecto es → haz 1 pregunta breve para entenderlo.',
+        ],
+        'spec' => [
+            'advance' => 'El cliente está conforme con el alcance o pide que avancemos → arma su *demo* visual.',
+            'adjust' => 'El cliente pide cambios o agrega información al alcance → tómalo en cuenta.',
+            'answer' => 'El cliente hace una pregunta o comenta algo → respóndele claramente, sin avanzar todavía.',
+        ],
+        'negotiating' => [
+            'advance' => 'Al cliente le gustó el demo, lo elogia ("está increíble", "me encanta", "wow"), o pregunta cómo contratarlo / cómo pagar → mándale su *cotización* (es la señal de compra; no te quedes solo respondiendo).',
+            'adjust' => 'El cliente pide cambios concretos al demo → tómalo en cuenta (se reconstruye).',
+            'answer' => 'El cliente tiene una duda sobre el PRODUCTO que NO es aprobación ni sobre cómo pagar → respóndele, sin avanzar.',
+        ],
+        'quoted' => [
+            'advance' => 'El cliente APRUEBA la cotización, dice que quiere arrancar, o pregunta cómo/dónde pagar → pásale los datos para el anticipo.',
+            'propose' => 'El cliente propone otra forma de pago o pide un descuento → regístralo.',
+            'answer' => 'El cliente tiene una duda sobre el PRODUCTO o el alcance (qué incluye, qué es X, cómo funciona algo) → respóndele bien, SIN avanzar al pago.',
+        ],
+    ];
+
+    /** Ask the assistant to choose the next funnel action + craft the reply. Null → use the fallback. */
+    private function aiDecide(Conversation $conversation, Lead $lead): ?array
+    {
+        $actions = self::FUNNEL_ACTIONS[$lead->stage->value] ?? null;
+        if (! $actions) {
+            return null;
+        }
+        $actionList = collect($actions)->map(fn ($desc, $key) => "- \"{$key}\": {$desc}")->implode("\n");
+        $transcript = collect($this->history($conversation))
+            ->map(fn ($m) => ($m['role'] === 'assistant' ? 'Asistente' : 'Cliente').': '.$m['content'])
+            ->implode("\n");
+        $wantsService = $lead->stage === LeadStage::Qualifying;
+
+        $prompt = $this->salesPersona()
+            ."\n\nEs una conversación de WhatsApp. ETAPA ACTUAL: {$lead->stage->value}. Decide la ÚNICA mejor acción siguiente entre estas:\n"
+            .$actionList
+            ."\n\nResponde ÚNICAMENTE con JSON válido (sin ```): {\"action\":\"<una de las claves de arriba>\",\"reply\":\"<el mensaje de WhatsApp para el cliente, cálido y breve>\""
+            .($wantsService ? ',"service":"<landing|website|ecommerce|webapp|mobileapp>"' : '')
+            .'}. El "reply" es lo que se le ENVÍA al cliente. Si la acción AVANZA (prepara alcance, demo, cotización o datos de pago), el sistema enviará además el documento correspondiente, así que NO inventes precios ni listas: usa el reply solo para confirmar con naturalidad.'
+            ."\n\nConversación:\n".$transcript;
+
+        try {
+            $raw = $this->assistant->complete($prompt);
+            if (! preg_match('/\{.*\}/s', (string) $raw, $m) || ! is_array($d = json_decode($m[0], true))) {
+                return null;
+            }
+            if (empty($d['action']) || ! array_key_exists($d['action'], $actions)) {
+                return null;
+            }
+
+            return $d;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /** Execute the AI's chosen action. Advancing steps reuse the proven deterministic doc flows. */
+    private function aiRoute(Conversation $conversation, Lead $lead, Message $inbound): ?Message
+    {
+        $d = $this->aiDecide($conversation, $lead);
+        if (! $d) {
+            return null; // AI down or unsure → deterministic fallback
+        }
+        $action = $d['action'];
+        $reply = isset($d['reply']) ? $this->cleanMessage((string) $d['reply']) : '';
+        $body = (string) ($inbound->body ?? '');
+        $say = fn (): ?Message => $reply !== '' ? $this->send($conversation, $reply) : null;
+
+        switch ($lead->stage) {
+            case LeadStage::Qualifying:
+                if ($action === 'advance') {
+                    $this->ensureService($lead, $d['service'] ?? null);
+
+                    return $this->sendScope($conversation, $lead->fresh());
+                }
+
+                return $say();
+
+            case LeadStage::Spec:
+                if ($action === 'advance') {
+                    return $this->startDemo($conversation, $lead);
+                }
+                if ($action === 'adjust') {
+                    $this->captureFeedback($lead, $body);
+                }
+
+                return $say();
+
+            case LeadStage::Negotiating:
+                if ($action === 'advance') {
+                    return $this->sendQuote($conversation, $lead);
+                }
+                if ($action === 'adjust') {
+                    $this->captureFeedback($lead, $body);
+                    if (config('overcloud.deploy.enabled')) {
+                        BuildDemo::dispatch($lead->id)->onQueue('deploy');
+                    }
+                }
+
+                return $say();
+
+            case LeadStage::Quoted:
+                if ($action === 'advance') {
+                    return $this->sendBankDetails($conversation, $lead);
+                }
+                if ($action === 'propose') {
+                    return $this->recordPaymentProposal($conversation, $lead, $body);
+                }
+
+                return $say();
+
+            default:
+                return null;
+        }
+    }
+
+    /** Make sure the lead has a service before scoping — use the AI's classification, else webapp. */
+    private function ensureService(Lead $lead, ?string $key): void
+    {
+        if ($lead->service_id) {
+            return;
+        }
+        $key = in_array($key, ['landing', 'website', 'ecommerce', 'webapp', 'mobileapp'], true) ? $key : 'webapp';
+        if ($service = Service::where('key', $key)->first()) {
+            $lead->update(['service_id' => $service->id, 'service_type' => $service->name]);
+        }
     }
 
     private function onNew(Conversation $conversation, Lead $lead): ?Message
@@ -686,7 +829,7 @@ class BotResponder
         $key = match (true) {
             Str::contains($text, ['tienda', 'ecommerce', 'e-commerce', 'venta', 'vender', 'productos', 'carrito']) => 'ecommerce',
             Str::contains($text, ['app movil', 'app móvil', 'aplicaci', 'android', 'ios']) => 'mobileapp',
-            Str::contains($text, ['app', 'sistema', 'plataforma', 'panel', 'dashboard']) => 'webapp',
+            Str::contains($text, ['app', 'sistema', 'plataforma', 'panel', 'dashboard', 'saas', 'crm', 'erp', 'software', 'gestion', 'gestión', 'management', 'system', 'platform', 'portal', 'booking', 'reservas', 'marketplace', 'inventario']) => 'webapp',
             Str::contains($text, ['sitio', 'multip', 'corporativo', 'institucional']) => 'website',
             Str::contains($text, ['landing', 'una pagina', 'una página', 'one page', 'aterrizaje']) => 'landing',
             Str::contains($text, ['web', 'pagina', 'página']) => 'website',
@@ -712,8 +855,15 @@ class BotResponder
 
     private function composeWithClaude(Conversation $conversation): ?string
     {
-        $history = $this->history($conversation);
-        $system = 'Eres el asistente de ventas de Overcloud, una agencia que crea páginas, sitios web, tiendas en línea y apps a precios accesibles. '
+        $reply = $this->assistant->message($this->salesPersona(), $this->history($conversation));
+
+        return $reply ? $this->cleanMessage($reply) : null;
+    }
+
+    /** The shared Overcloud sales persona + rules — used for conversational wording AND AI routing. */
+    private function salesPersona(): string
+    {
+        return 'Eres el asistente de ventas de Overcloud, una agencia que crea páginas, sitios web, tiendas en línea y apps a precios accesibles. '
             .'Hablas español, cálido, breve y profesional. Tu objetivo: entender qué necesita el cliente (tipo de proyecto, páginas, idiomas, si tiene logo/textos o sitios de referencia) para prepararle su proyecto. '
             .'FLUJO en este orden, explícalo si ayuda: 1) le preparas un *alcance* detallado (un documento, sin costo) con todo lo que incluye; 2) le armas un *demo visual* en vivo para que lo vea; 3) hasta el final, la *cotización*. '
             .'Cuando el cliente confirme que quiere avanzar (un "sí", "va", "dale"…), NO le pidas que escriba ninguna palabra clave: simplemente dile que le preparas su *alcance* enseguida. Nunca presentes "cotización" como primer paso ni le pidas teclear palabras. '
@@ -728,10 +878,6 @@ class BotResponder
             .'NUNCA inventes ni ofrezcas descuentos, promociones, precios ni condiciones por tu cuenta. '
             .'RESPONDE SIEMPRE sus dudas (no las esquives ni repitas lo mismo). Sobre la *mensualidad*: INCLUYE el *hosting* (lo que mantiene el sitio/app EN LÍNEA) más cambios y soporte continuos. Si NO se paga, el sitio deja de estar en línea. Hay dos planes: *solo hosting* (más económico, solo lo mantiene online) y *hosting + soporte* (también cambios y mejoras cuando los pida). El plan de *solo hosting* ofrécelo ÚNICAMENTE si el cliente lo pide. El *proyecto* es un pago único aparte de la mensualidad. '
             .'Si pide funciones extra (ej. un botón para hablar directo con él, un menú de servicios, etc.), dile que con gusto se incluyen y las anotas. Sé concreto y cálido; jamás repitas la misma frase dos veces.';
-
-        $reply = $this->assistant->message($system, $history);
-
-        return $reply ? $this->cleanMessage($reply) : null;
     }
 
     private function composeGroup(Conversation $conversation): ?string
