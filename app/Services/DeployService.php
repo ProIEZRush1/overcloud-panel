@@ -68,10 +68,14 @@ class DeployService
         }
 
         if ($fullstack) {
-            $this->notify($project, "Estoy desarrollando {$label} como un *sistema completo* — con inicio de sesión, panel de administración y base de datos. Esto toma varios minutos. ⚙️");
-            if (! $this->agent->isAvailable()
-                || ! $this->cloneRepo($c, $c['stacks']['laravel-vue']['repo'], $dir)
-                || ! $this->agent->buildFullstack($project, $dir, $admin)) {
+            $this->reportProgress($project, 0,
+                "Estoy desarrollando {$label} como un *sistema completo* — con inicio de sesión, panel de administración y base de datos. 🛠️\n\n"
+                ."📺 Puedes ver el avance en vivo aquí:\n".$this->progressUrl($project));
+            if (! $this->agent->isAvailable() || ! $this->cloneRepo($c, $c['stacks']['laravel-vue']['repo'], $dir)) {
+                return $this->fail($project, 'no se pudo construir el sistema');
+            }
+            $this->reportProgress($project, 1, '⚙️ Estoy programando tus módulos, tu panel de administración y conectando todo. Esto toma varios minutos.');
+            if (! $this->agent->buildFullstack($project, $dir, $admin)) {
                 return $this->fail($project, 'no se pudo construir el sistema');
             }
             $this->ensureMigrateOnStart($dir); // run migrations + seed on every boot (permanent Postgres)
@@ -133,6 +137,7 @@ class DeployService
         // dedicated Postgres (permanent data) and the runtime config (APP_URL = final domain).
         $env = (array) ($brief['env'] ?? []);
         if ($fullstack) {
+            $this->reportProgress($project, 2, '🗄️ Creando tu base de datos segura donde se guardará toda tu información de forma permanente.');
             $db = (array) ($brief['db'] ?? []);
             if (empty($db['DB_HOST'])) {
                 $db = $this->provisionDatabase($c, $name);
@@ -151,16 +156,26 @@ class DeployService
         }
         $this->applyEnv($c, $uuid, $env);
 
-        $this->notify($project, "¡Ya casi! 🚀 Estoy publicando {$label} en línea y revisando que todo funcione bien...");
+        if ($fullstack) {
+            $this->reportProgress($project, 3, "¡Ya casi! 🚀 Estoy publicando {$label} en línea.");
+        } else {
+            $this->notify($project, "¡Ya casi! 🚀 Estoy publicando {$label} en línea y revisando que todo funcione bien...");
+        }
 
         // Self-heal: deploy -> wait for the build -> E2E verify the LIVE URL (the source
         // of truth, with retries for routing delay); retry the whole cycle on failure.
         for ($attempt = 1; $attempt <= (int) $c['max_attempts']; $attempt++) {
+            if ($fullstack) {
+                $this->reportProgress($project, 4);
+            }
             $depUuid = $this->triggerDeploy($c, $uuid);
 
             $verdict = $this->waitForLive($c, $depUuid, $url, $content, $stack);
             if ($verdict['ok']) {
                 $project->update(['status' => ProjectStatus::Live, 'delivered_at' => now()]);
+                if ($fullstack) {
+                    $this->reportProgress($project, 5, null, true);
+                }
                 Log::info('Deploy live', ['project' => $project->id, 'url' => $url, 'attempt' => $attempt]);
 
                 return $url;
@@ -922,6 +937,36 @@ class DeployService
 
             return false;
         }
+    }
+
+    /** Steps shown on the client's live progress page during a full-stack build. */
+    private const FS_STEPS = [
+        'Preparando tu proyecto',
+        'Desarrollando tu sistema (módulos, login y panel de administración)',
+        'Creando tu base de datos',
+        'Publicando tu sistema en línea',
+        'Verificando que todo funcione',
+        '¡Tu sistema está listo!',
+    ];
+
+    /** Record build progress on the project (drives the live progress page) and optionally DM the client. */
+    private function reportProgress(Project $project, int $idx, ?string $message = null, bool $done = false): void
+    {
+        try {
+            $brief = (array) ($project->brief ?? []);
+            $brief['progress'] = ['steps' => self::FS_STEPS, 'idx' => $idx, 'done' => $done, 'updated_at' => now()->toIso8601String()];
+            $project->update(['brief' => $brief]);
+        } catch (\Throwable $e) {
+        }
+        if ($message) {
+            $this->notify($project, $message);
+        }
+    }
+
+    /** The public live-progress URL the client can open to watch their system being built. */
+    private function progressUrl(Project $project): string
+    {
+        return rtrim((string) config('app.url'), '/').'/progreso/'.$project->uuid;
     }
 
     /** Best-effort progress message to the client's DM during the build/deploy. */
