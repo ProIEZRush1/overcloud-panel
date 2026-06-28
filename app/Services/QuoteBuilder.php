@@ -2,10 +2,10 @@
 
 namespace App\Services;
 
+use App\Enums\LeadStage;
 use App\Enums\QuoteItemType;
 use App\Enums\QuoteStatus;
 use App\Models\Lead;
-use App\Models\MaintenancePlan;
 use App\Models\Quote;
 use App\Models\Service;
 use App\Models\ServiceFeature;
@@ -45,8 +45,8 @@ class QuoteBuilder
             'maintenance_monthly_cents' => $maintenance,
             'status' => QuoteStatus::Draft,
             'valid_until' => now()->addDays((int) Setting::get('quote_valid_days', 15)),
-            'terms' => 'Forma de pago: '.$depositPercent.'% para iniciar, '.$deployPercent.'% al desplegar el sitio y '.$finalPercent.'% en la entrega final. '
-                .'El mantenimiento mensual es opcional y se calcula según las funciones incluidas. Precios en MXN.',
+            'terms' => 'Forma de pago del proyecto (pago único): '.$depositPercent.'% para iniciar, '.$deployPercent.'% al desplegar el sitio y '.$finalPercent.'% en la entrega final. '
+                .'El mantenimiento mensual es un servicio aparte y recurrente (ver el recuadro de mantenimiento), no forma parte del precio del proyecto. Precios en MXN.',
         ]);
 
         // Main service line.
@@ -80,7 +80,7 @@ class QuoteBuilder
         }
 
         $quote->recalculateTotals()->save();
-        $lead->update(['stage' => \App\Enums\LeadStage::Quoted]);
+        $lead->update(['stage' => LeadStage::Quoted]);
 
         return $quote->fresh('items');
     }

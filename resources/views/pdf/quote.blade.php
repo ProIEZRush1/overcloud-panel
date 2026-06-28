@@ -24,6 +24,13 @@
     .totals .grand { font-size: 15px; font-weight: bold; color: {{ $brand['primary'] }}; border-top: 2px solid {{ $brand['primary'] }}; }
     .chip { display: inline-block; background: {{ $brand['accent'] }}; color:#fff; padding: 4px 10px; border-radius: 10px; font-size: 11px; }
     .terms { margin-top: 26px; padding: 14px 16px; background: #f9fafb; border-left: 3px solid {{ $brand['accent'] }}; }
+    .maint { margin-top: 22px; padding: 16px 18px; background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 8px; }
+    .maint .mt { font-size: 13px; font-weight: bold; color: {{ $brand['primary'] }}; }
+    .maint .mt .apart { font-weight: normal; font-size: 11px; color: #6b7280; }
+    .maint p { margin: 8px 0 12px; line-height: 1.5; color: #374151; }
+    .maint .price { width: 100%; border-top: 1px dashed #c4b5fd; padding-top: 10px; }
+    .maint .price td { padding: 2px 0; }
+    .maint .price .amt { font-size: 15px; font-weight: bold; color: {{ $brand['primary'] }}; }
     .foot { margin-top: 30px; text-align: center; color: #9ca3af; font-size: 10px; }
 </style>
 </head>
@@ -84,14 +91,31 @@
             @if($quote->discount_cents > 0)
                 <tr><td class="muted">Descuento</td><td class="right">- {{ Money::format($quote->discount_cents, $quote->currency) }}</td></tr>
             @endif
-            <tr><td class="grand">Total</td><td class="right grand">{{ Money::format($quote->total_cents, $quote->currency) }}</td></tr>
+            <tr><td class="grand">Total del proyecto</td><td class="right grand">{{ Money::format($quote->total_cents, $quote->currency) }}</td></tr>
+            <tr><td colspan="2" class="muted" style="font-size:10px; text-align:right;">Pago único del proyecto</td></tr>
             @if($quote->deposit_cents > 0)
                 <tr><td class="muted">Anticipo ({{ $quote->deposit_percent }}%)</td><td class="right">{{ Money::format($quote->deposit_cents, $quote->currency) }}</td></tr>
             @endif
-            @if($quote->maintenance_monthly_cents > 0)
-                <tr><td class="muted">Mantenimiento mensual</td><td class="right">{{ Money::format($quote->maintenance_monthly_cents, $quote->currency) }}</td></tr>
-            @endif
         </table>
+
+        @if($quote->maintenance_monthly_cents > 0)
+            <div class="maint">
+                <div class="mt">Mantenimiento mensual <span class="apart">— servicio aparte del proyecto</span></div>
+                <p>
+                    El <strong>proyecto</strong> de arriba es un <strong>pago único</strong>. El <strong>mantenimiento</strong> es un
+                    servicio <strong>mensual e independiente</strong> que mantiene tu sitio o app <strong>en línea</strong> (hosting) e
+                    incluye <strong>cambios y soporte</strong> cuando los necesites. No forma parte del precio del proyecto y se cobra
+                    por separado, mes con mes. Si más adelante prefieres solo mantener el sitio publicado, también hay un plan
+                    de <strong>solo hosting</strong> más económico — solo pídelo.
+                </p>
+                <table class="price">
+                    <tr>
+                        <td>Plan de mantenimiento (hosting + cambios y soporte)</td>
+                        <td class="right"><span class="amt">{{ Money::format($quote->maintenance_monthly_cents, $quote->currency) }}</span> <span class="muted">/ mes</span></td>
+                    </tr>
+                </table>
+            </div>
+        @endif
 
         @if($quote->terms)
             <div class="terms"><strong>Términos:</strong> {{ $quote->terms }}</div>
