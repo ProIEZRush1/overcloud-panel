@@ -58,6 +58,15 @@ class AgentBuildService
             .'Siembra el usuario admin indicado en el DatabaseSeeder. Corre las migraciones, `npm run build`, y SIGUE EL PROTOCOLO DE VERIFICACIÓN: levanta la app, regístrate/inicia sesión y confirma que cada módulo guarda y lee datos reales. No termines hasta verificarlo.');
     }
 
+    /** Repair a full-stack Laravel+Vue build that failed to deploy/run, using the deploy logs. */
+    public function repairFullstack(Project $project, string $dir, string $logs, array $admin): bool
+    {
+        return $this->run($project->id, $dir, $this->context($project->lead, 'fullstack') + ['admin' => $admin],
+            "El despliegue de la app Laravel+Vue FALLÓ o no responde. Logs del build/runtime:\n".mb_substr($logs, 0, 4000)
+            ."\n\nDiagnostica y CORRIGE la causa en esta app Laravel+Vue (errores de migración/compatibilidad Postgres, assets sin compilar, rutas, controladores, etc.). "
+            .'Recompila assets (`npm run build`), valida migraciones (`php artisan migrate:fresh --seed` en sqlite) y vuelve a correr las pruebas Pest y de navegador del PROTOCOLO DE VERIFICACIÓN. No termines hasta que TODO pase.');
+    }
+
     /** Apply a client-requested change to an existing project checkout. */
     public function change(Project $project, string $dir, string $instruction): bool
     {
@@ -214,13 +223,13 @@ class AgentBuildService
         - Asegúrate de que `docker/start.sh` ejecute las migraciones y el seed al arrancar: debe incluir `php artisan migrate --force` y `php artisan db:seed --force` ANTES de `php artisan serve`. Si no están, agrégalos.
         - Compila los assets: corre `npm install` (si hace falta) y **`npm run build`**, y deja el resultado committeado en `public/build`.
 
-        ## PROTOCOLO DE VERIFICACIÓN — NO termines sin completarlo
-        1. `composer install` (si falta) y `npm run build`. Corrige cualquier error de compilación de Vue.
-        2. Migra y siembra contra una BD de prueba: `php artisan migrate:fresh --seed` (usa el sqlite local). Debe correr sin errores.
-        3. Levanta la app: `php artisan serve --port 8099 >/tmp/srv.log 2>&1 &`.
-        4. Con curl confirma que `/` y `/login` responden 200. Inicia sesión por API/programáticamente o crea un test que: cree un registro en CADA módulo y lo lea de vuelta de la BD (Pest/PHPUnit), o usa `php artisan tinker` para `Modelo::create([...])` y `Modelo::count()`.
-        5. Confirma que el dashboard lista los módulos y que cada CRUD guarda en la BD (no en memoria/localStorage).
-        6. Si algo falla, CORRÍGELO y repite. Al terminar, `kill` del server local. NO hagas git push ni deploy.
+        ## PROTOCOLO DE VERIFICACIÓN — NO termines sin completarlo (déjalo PERFECTO)
+        1. `composer install` (si falta) y `npm run build`. Corrige CUALQUIER error de compilación de Vue/Inertia hasta que `npm run build` pase limpio.
+        2. Migra y siembra contra el sqlite local de prueba: `php artisan migrate:fresh --seed`. Debe correr SIN errores (migraciones compatibles con Postgres y SQLite).
+        3. **Pruebas Pest (e2e de backend) OBLIGATORIAS**: escribe en `tests/Feature/` una prueba por módulo que: (a) inicie sesión como el admin sembrado, (b) cree un registro vía el endpoint/controlador real, (c) lo lea de vuelta desde la base de datos, (d) confirme que persiste. Corre `php artisan test` y NO termines hasta que TODAS pasen.
+        4. **Prueba de NAVEGADOR (Playwright) OBLIGATORIA**: instálalo si falta (`composer require pestphp/pest-plugin-browser --dev --no-interaction` y `npx playwright install chromium`) y escribe en `tests/Browser/` una prueba que, en un navegador real contra la app servida localmente: abra `/login`, inicie sesión con el admin, navegue al dashboard y a cada módulo, **cree un registro por la interfaz**, recargue la página y **confirme que el dato sigue ahí** (persistencia real). Corre `php artisan test --filter=Browser` (o `./vendor/bin/pest tests/Browser`) y NO termines hasta que pase. Si el navegador no se puede instalar en este entorno, déjalo escrito y asegúrate de que las pruebas Pest del paso 3 cubran login + CRUD + persistencia de cada módulo.
+        5. Confirma que el dashboard lista TODOS los módulos y que cada CRUD guarda en la BD (NUNCA en memoria/localStorage).
+        6. Si algo falla, CORRÍGELO y repite los pasos hasta que TODO pase. Al terminar, `kill` de procesos locales. NO hagas git push ni deploy.
         MD;
 
         File::put($dir.'/CLAUDE.md', $md);

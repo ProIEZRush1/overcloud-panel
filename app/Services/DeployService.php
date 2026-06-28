@@ -170,8 +170,12 @@ class DeployService
             if ($attempt < (int) $c['max_attempts']) {
                 $this->notify($project, "Estoy afinando unos detalles para que {$label} quede perfecto. 🔧");
             }
-            // On a custom build, let Claude Code repair the repo from the logs before retrying.
-            if ($custom && $dir && $this->agent->repair($project, $stackKey, $dir, $this->fetchLogs($c, $depUuid))) {
+            // Let Claude Code repair the repo from the deploy logs before retrying (self-heal).
+            $logs = $this->fetchLogs($c, $depUuid);
+            if ($fullstack && $dir && $this->agent->repairFullstack($project, $dir, $logs, $admin)) {
+                $this->ensureMigrateOnStart($dir);
+                $this->pushDir($c, $dir, $name);
+            } elseif ($custom && $dir && $this->agent->repair($project, $stackKey, $dir, $logs)) {
                 $this->pushDir($c, $dir, $name);
             }
             sleep(4);
