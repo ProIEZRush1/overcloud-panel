@@ -2,12 +2,16 @@
 
 namespace App\Console\Commands;
 
+use App\Enums\LeadStage;
 use App\Enums\MessageDirection;
+use App\Jobs\BuildDemo;
 use App\Models\Conversation;
+use App\Models\Lead;
 use App\Models\Message;
 use App\Models\WhatsAppAccount;
 use App\Services\WhatsAppGateway;
 use Illuminate\Console\Command;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -63,9 +67,59 @@ class MonitorConversations extends Command
         // Also watch the deploy queue (the conversation loop above is blind to it).
         $this->checkDeployQueue($gateway, $owner, $alerts);
 
+        // And watch for demos that were promised but never landed (safety net over BuildDemo's retry).
+        $this->checkStuckDemos($gateway, $owner, $alerts);
+
         $this->info("Monitor done. {$alerts} alert(s).");
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Demo watchdog: a lead in negotiating that was promised a demo but has no demo link after a
+     * while AND has no demo job in flight → the build died/never ran. Re-dispatch it once and alert.
+     */
+    private function checkStuckDemos(WhatsAppGateway $gateway, string $owner, int &$alerts): void
+    {
+        try {
+            // Only act when nothing is currently building, so we never pile onto an in-progress demo.
+            $demoJobInFlight = DB::table('jobs')
+                ->where('queue', 'deploy')->where('payload', 'like', '%BuildDemo%')->exists();
+            if ($demoJobInFlight) {
+                return;
+            }
+
+            Lead::where('stage', LeadStage::Negotiating->value)
+                ->where('updated_at', '>=', now()->subHours(12))
+                ->with('conversations')->get()
+                ->each(function (Lead $lead) use ($gateway, $owner, &$alerts) {
+                    $conv = $lead->conversations->firstWhere('is_group', false);
+                    if (! $conv || ! $conv->ai_enabled) {
+                        return;
+                    }
+                    // Already has a demo link? Nothing to do.
+                    $hasLink = $conv->messages()->where('is_from_me', true)
+                        ->where('body', 'like', '%.overcloud.us%')->exists();
+                    if ($hasLink) {
+                        return;
+                    }
+                    // Was a demo promised long enough ago to be considered stuck?
+                    $promisedAt = $conv->messages()->where('is_from_me', true)
+                        ->where('body', 'like', '%demo%')->latest('id')->value('created_at');
+                    if (! $promisedAt || Carbon::parse($promisedAt)->gt(now()->subMinutes(25))) {
+                        return;
+                    }
+                    // Re-dispatch once per stuck period (cache guard) and alert the owner.
+                    if (! Cache::add('demo-redispatch:'.$lead->id, 1, now()->addHour())) {
+                        return;
+                    }
+                    BuildDemo::dispatch($lead->id)->onQueue('deploy');
+                    $who = $lead->company ?: ($lead->name ?: ('lead #'.$lead->id));
+                    $this->notifyOwner($gateway, $owner, $conv, "🎨 El demo de {$who} no se había enviado — lo reintenté automáticamente", $alerts);
+                });
+        } catch (\Throwable $e) {
+            Log::warning('checkStuckDemos failed', ['e' => $e->getMessage()]);
+        }
     }
 
     private function notifyOwner(WhatsAppGateway $gateway, string $owner, Conversation $conv, string $reason, int &$alerts): void

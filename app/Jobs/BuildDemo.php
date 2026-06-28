@@ -2,6 +2,9 @@
 
 namespace App\Jobs;
 
+use App\Enums\MessageDirection;
+use App\Enums\MessageStatus;
+use App\Enums\MessageType;
 use App\Models\Lead;
 use App\Services\DeployService;
 use App\Services\WhatsAppGateway;
@@ -24,13 +27,16 @@ class BuildDemo implements ShouldQueue
 
     public int $timeout = 1800;
 
+    /** A demo must reliably land — keep retrying until it's live (or we exhaust attempts). */
+    private const MAX_ATTEMPTS = 4;
+
     /** Survive a worker restart (deploys): retry a killed build instead of stranding the client. */
     public function retryUntil(): \DateTimeInterface
     {
-        return now()->addMinutes(45);
+        return now()->addMinutes(90);
     }
 
-    public function __construct(public int $leadId) {}
+    public function __construct(public int $leadId, public int $attempt = 1) {}
 
     public function handle(DeployService $deploy, WhatsAppGateway $gateway): void
     {
@@ -41,6 +47,17 @@ class BuildDemo implements ShouldQueue
 
         $url = $deploy->deployDemo($lead);
         if (! $url) {
+            // Demos must never silently die: auto-retry with backoff. Only alert the owner once
+            // attempts are exhausted (never tell the client). The next attempt re-runs the full build.
+            if ($this->attempt < self::MAX_ATTEMPTS) {
+                self::dispatch($this->leadId, $this->attempt + 1)
+                    ->onQueue('deploy')
+                    ->delay(now()->addSeconds(60 * $this->attempt));
+            } else {
+                $deploy->alertOwner('🎨 El demo de "'.($lead->company ?: $lead->name ?: ('lead #'.$lead->id))
+                    .'" no quedó en línea tras '.self::MAX_ATTEMPTS.' intentos. Requiere revisión manual.');
+            }
+
             return; // never surface an error to the client
         }
 
@@ -49,17 +66,17 @@ class BuildDemo implements ShouldQueue
         if ($conv && $account) {
             $text = "¡Aquí está tu *demo*! 🎨 Mira cómo se vería tu proyecto en vivo:\n{$url}\n\n¿Qué te parece? Si te late, te paso la *cotización* para arrancar. ✅";
             $out = $conv->messages()->create([
-                'direction' => \App\Enums\MessageDirection::Out,
-                'type' => \App\Enums\MessageType::Text,
+                'direction' => MessageDirection::Out,
+                'type' => MessageType::Text,
                 'body' => $text,
-                'status' => \App\Enums\MessageStatus::Pending,
+                'status' => MessageStatus::Pending,
                 'is_from_me' => true,
                 'ai_generated' => true,
                 'wa_timestamp' => now(),
             ]);
             $r = $gateway->sendText($account->session_name, $conv->contact_jid, $text);
             $out->update([
-                'status' => ! empty($r['wa_message_id']) ? \App\Enums\MessageStatus::Sent : \App\Enums\MessageStatus::Pending,
+                'status' => ! empty($r['wa_message_id']) ? MessageStatus::Sent : MessageStatus::Pending,
                 'wa_message_id' => $r['wa_message_id'] ?? null,
             ]);
         }

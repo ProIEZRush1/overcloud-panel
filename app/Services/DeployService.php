@@ -178,8 +178,9 @@ class DeployService
             }
         }
 
-        // Never confirmed live → don't hand the client a dead link; alert the owner instead.
-        $this->alertOwner('🎨 El demo de "'.($lead->company ?: $lead->name).'" se construyó pero no confirmó en línea ('.$url.'). Revísalo.');
+        // Never confirmed live → don't hand the client a dead link. BuildDemo owns retry + the
+        // owner alert (after all attempts), so just log here to avoid alerting on every attempt.
+        Log::warning('demo not live after attempts', ['lead' => $lead->id, 'url' => $url]);
 
         return null;
     }
