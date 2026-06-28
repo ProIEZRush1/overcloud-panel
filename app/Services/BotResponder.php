@@ -272,26 +272,44 @@ class BotResponder
             .'El "reply" es lo que se le ENVÍA. Si la acción es "change", confirma con naturalidad que lo aplicas (el sistema lo construye y le avisa); NO pidas que repita nada.'
             ."\n\nConversación:\n".$transcript;
 
+        $reply = '';
+        $action = 'answer';
         try {
             $raw = $this->assistant->complete($prompt);
-            if (! preg_match('/\{.*\}/s', (string) $raw, $m) || ! is_array($d = json_decode($m[0], true)) || empty($d['action'])) {
-                return null;
+            if (preg_match('/\{.*\}/s', (string) $raw, $m) && is_array($d = json_decode($m[0], true)) && ! empty($d['action'])) {
+                $action = $d['action'] === 'change' ? 'change' : 'answer';
+                $reply = isset($d['reply']) ? $this->cleanMessage((string) $d['reply']) : '';
             }
-            $reply = isset($d['reply']) ? $this->cleanMessage((string) $d['reply']) : '';
-
-            if ($d['action'] === 'change') {
-                // Reuse the proven change flow (audio gets a confirm; text dispatches the change).
-                if ($reply !== '') {
-                    $this->send($conversation, $reply);
-                }
-
-                return $this->onProduction($conversation, $lead, $inbound, Str::lower(trim($inbound->body ?? '')));
-            }
-
-            return $reply !== '' ? $this->send($conversation, $reply) : null;
         } catch (\Throwable $e) {
-            return null;
+            // AI hiccup → fall through to the safe deterministic handling below (never canned).
         }
+
+        $text = Str::lower(trim($inbound->body ?? ''));
+
+        // A change captured from a VOICE NOTE is always confirmed before touching the live site.
+        if ($inbound->type === MessageType::Audio && ($action === 'change' || $this->looksLikeChange($text))) {
+            $conversation->setPendingChange(trim((string) $inbound->body));
+
+            return $this->send($conversation,
+                "Entendí que quieres este cambio:\n«".trim((string) $inbound->body)."»\n\n¿Lo aplico a tu sistema? Respóndeme *sí* para confirmar. 🙌");
+        }
+
+        // A real, actionable text change → dispatch it. (A question the AI mislabeled 'change' is NOT
+        // actionable via looksLikeChange, so it falls through to an answer below — never auto-applied.)
+        if ($action === 'change' && $this->looksLikeChange($text)) {
+            return $this->dispatchConfirmedChange($conversation, $lead, trim((string) $inbound->body));
+        }
+
+        // Otherwise ANSWER — the AI's reply, or a warm non-canned fallback (never the robotic line).
+        if ($reply !== '') {
+            return $this->send($conversation, $reply);
+        }
+        $project = Project::where('lead_id', $lead->id)->latest('id')->first();
+        $url = $project?->prod_url;
+
+        return $this->send($conversation,
+            '¡Claro! 🙌 Tu sistema ya está en línea'.($url ? " en:\n{$url}" : '.')
+            ."\n\n¿Qué te gustaría saber o ajustar? Si quieres un cambio, descríbemelo y lo aplico; cualquier duda, aquí estoy. 😊");
     }
 
     /** Support persona for delivered clients: warm, never reveals the AI, points changes to the group. */
