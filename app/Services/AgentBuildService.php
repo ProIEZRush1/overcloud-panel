@@ -310,6 +310,20 @@ class AgentBuildService
         - Interconecta módulos donde tenga sentido (relaciones; un registro aparece en lo relacionado).
         - **Usuario admin** idempotente en `database/seeders/DatabaseSeeder.php`: email `{$email}`, contraseña `{$pass}` (usa `User::updateOrCreate([...], [...'password' => Hash::make('{$pass}')])`). Siembra también algunos registros de ejemplo realistas del giro por módulo, para que el dashboard no se vea vacío.
 
+        ## 2.5) CATÁLOGO DE CAPACIDADES — agrégalas cuando el negocio del cliente las pida
+        Además de sus módulos, ofrece e implementa las que apliquen a su giro (cada una como funcionalidad REAL: migración+modelo+controlador+páginas Vue+rutas+nav+datos persistentes, y probada en el e2e). Si una necesita un paquete, instálalo (`composer require ...`) y haz que **degrade con elegancia** si falta una llave (sin romper la app):
+        - **💳 Pagos (Stripe)** — `composer require stripe/stripe-php`: cobros + enlaces de pago (Checkout) + webhook; si no hay `STRIPE_SECRET`, la UI sigue pero sin generar enlaces. Útil para tiendas, servicios, suscripciones, bots que venden.
+        - **👥 Usuarios y roles** — equipo con roles (admin/operador/soporte) y middleware que protege rutas por rol. (Roles/permisos simples en tablas; sin paquetes pesados.)
+        - **📊 Reportes y export** — `composer require barryvdh/laravel-dompdf`: dashboard con métricas + gráfica simple + exportar a CSV y PDF.
+        - **📁 Archivos/imágenes** — subida validada al disco `public` + galería; reutilizable para productos, documentos, comprobantes.
+        - **⚙️ Ajustes y branding** — tabla settings (clave/valor) + página donde el negocio edita su nombre, logo, colores y contacto; expón esos valores a la UI.
+        - **📝 Bitácora/auditoría** — registra create/update/delete con usuario + cambios (observer) y una página filtrable.
+        - **🔔 Notificaciones** — avisos in-app (campanita) y/o email para eventos del negocio.
+        - **🔍 Búsqueda global** — un buscador que cruza los modelos principales del cliente.
+        - **📥 Importación CSV** — alta masiva: subir CSV, mapear columnas, insertar (CSV nativo de PHP, sin paquete pesado).
+        - **🔌 API REST + tokens** — `composer require laravel/sanctum`: endpoints `/api/v1/...` + página para crear/revocar tokens, para integraciones del cliente.
+        Migraciones compatibles con Postgres Y SQLite. No metas capacidades que el cliente no necesite (mantén el sistema enfocado y ligero).
+
         ## 3) BASE DE DATOS — SOLO SQLITE LOCAL (CRÍTICO)
         - Este entorno ya está forzado a un **sqlite local** (`database/database.sqlite`) y se borraron las variables DB_* del panel. **JAMÁS** corras un comando de base de datos contra otra cosa que no sea ese sqlite local. NO te conectes a Postgres ni a ninguna BD remota, NO exportes DB_HOST/DB_*, NO uses `migrate:fresh` apuntando a otro lado.
         - Migraciones **compatibles con Postgres Y SQLite** (evita tipos/funciones solo-MySQL; usa `json`, `decimal`, `string`, `text`, `timestamps`, etc.). En producción el harness inyecta Postgres y corre las migraciones al arrancar; tú solo validas en sqlite local. NO toques `config/database.php` salvo lo permitido arriba.
