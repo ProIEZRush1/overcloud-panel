@@ -351,12 +351,23 @@ class DeployService
             return null;
         }
 
-        // Nice demo domain under overcloud.us — unique per lead so two same-named clients
-        // never share one demo URL (which would serve one client's demo to the other).
-        $nice = $this->assignDomain($c, $uuid, $this->demoSubdomain($lead));
-        if ($nice) {
-            $url = $nice;
+        // Nice demo domain under overcloud.us — unique per lead so two same-named clients never share
+        // one demo URL. NEVER hand the client the raw Coolify default (http://<hash>.<server-ip>.sslip.io)
+        // — it's ugly, insecure (http) and leaks the server IP. Retry the domain assignment, and if it
+        // still won't take, fail the demo (BuildDemo retries) rather than deliver an sslip.io link.
+        $nice = null;
+        for ($t = 0; $t < 3 && ! $nice; $t++) {
+            $nice = $this->assignDomain($c, $uuid, $this->demoSubdomain($lead));
+            if (! $nice) {
+                sleep(3);
+            }
         }
+        if (! $nice) {
+            Log::warning('demo domain not assigned — refusing to deliver a raw sslip.io URL', ['lead' => $lead->id]);
+
+            return null;
+        }
+        $url = $nice;
 
         $stack = ['kind' => 'web', 'markers' => []];
         $content = ['business' => (string) ($lead->company ?? '')];

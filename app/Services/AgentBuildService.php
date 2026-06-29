@@ -2,11 +2,15 @@
 
 namespace App\Services;
 
+use App\Enums\MessageType;
+use App\Models\Conversation;
 use App\Models\Lead;
+use App\Models\Message;
 use App\Models\Project;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 /**
@@ -242,11 +246,37 @@ class AgentBuildService
     /** Build a complete, representative visual demo for a lead (shown before the quote). */
     public function buildDemo(Lead $lead, string $dir): bool
     {
+        $logoNote = $this->captureLeadLogo($lead, $dir);
+
         return $this->run($lead->id, $dir, $this->context($lead, 'demo'),
-            'Construye un DEMO COMPLETO y representativo del proyecto siguiendo CLAUDE.md — NO un boceto básico de una sola sección. '
-            .'Refleja TODO lo del alcance: si es una app, muestra sus pantallas y funciones principales (varias vistas enlazadas); si es un sitio o tienda, todas sus secciones/páginas clave (inicio, catálogo/servicios, detalle, contacto, etc.) con navegación que funcione. '
-            .'Usa contenido realista y MUY específico del negocio (nombres, textos, datos de ejemplo creíbles del giro). Debe sentirse como el producto TERMINADO, premium. '
-            .'Varias páginas HTML enlazadas o una página con muchas secciones completas. No necesita backend real. Sigue el PROTOCOLO DE VERIFICACIÓN antes de terminar.');
+            'Construye un DEMO VISUAL LIGERO y rápido — es un DEMO para enamorar al cliente, NO el producto completo. '
+            .'Haz UNA sola página (landing) atractiva y moderna que dé el "sabor" de su marca y su giro: un hero con su nombre/logo, y 3–4 secciones representativas (p. ej. servicios/destinos/catálogo de ejemplo, beneficios, una galería simple y contacto). '
+            .'NADA pesado: NO construyas el sistema completo, NO muchas páginas, NO backend, NO login — solo una muestra visual creíble y bonita que cargue RÁPIDO. '
+            .$logoNote
+            .'Usa colores y contenido realistas del giro del cliente y respeta cualquier ajuste de estilo que haya pedido. Verifica que la página cargue bien (PROTOCOLO DE VERIFICACIÓN) antes de terminar.');
+    }
+
+    /** Pull the logo the client sent over WhatsApp into the demo build dir so the demo uses it, not a fake one. */
+    private function captureLeadLogo(Lead $lead, string $dir): string
+    {
+        try {
+            $convIds = Conversation::where('lead_id', $lead->id)->pluck('id');
+            $msg = Message::whereIn('conversation_id', $convIds)
+                ->where('type', MessageType::Image)
+                ->whereNotNull('media_path')
+                ->latest('id')->first();
+            if ($msg && Storage::exists($msg->media_path)) {
+                $ext = pathinfo($msg->media_path, PATHINFO_EXTENSION) ?: 'png';
+                File::ensureDirectoryExists($dir.'/public');
+                File::put($dir.'/public/brand-logo.'.$ext, Storage::get($msg->media_path));
+
+                return 'EL CLIENTE YA ENVIÓ SU LOGO: está en `public/brand-logo.'.$ext.'` — ÚSALO TAL CUAL en el header/hero (referencia `/brand-logo.'.$ext.'`); NO inventes ni generes otro logo. ';
+            }
+        } catch (\Throwable $e) {
+            Log::warning('captureLeadLogo failed', ['lead' => $lead->id, 'e' => $e->getMessage()]);
+        }
+
+        return '';
     }
 
     /** Business/scope context shared by every build mode. */

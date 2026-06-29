@@ -13,6 +13,8 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * Builds + deploys a quick visual demo for a lead BEFORE the quote, then shares the
@@ -45,6 +47,27 @@ class BuildDemo implements ShouldQueue
             return;
         }
 
+        // Dedup: a client often sends feedback as 2-3 quick messages ("colores neutros" + "estilo Expedia"),
+        // each of which would otherwise dispatch its own demo build → duplicate sends. Only ONE build per
+        // lead runs at a time (all the captured feedback is incorporated in that single rebuild), and a
+        // second dispatch that arrives right after a fresh delivery is skipped.
+        $lock = Cache::lock('builddemo:'.$this->leadId, 1500);
+        if (! $lock->get()) {
+            return;
+        }
+        try {
+            $deliveredAt = $lead->meta['demo']['delivered_at'] ?? null;
+            if ($this->attempt === 1 && $deliveredAt && Carbon::parse($deliveredAt)->diffInMinutes(now()) < 3) {
+                return; // a demo was just delivered (the other dispatch did it) — don't send a duplicate
+            }
+            $this->build($deploy, $gateway, $lead);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    private function build(DeployService $deploy, WhatsAppGateway $gateway, Lead $lead): void
+    {
         $url = $deploy->deployDemo($lead);
         if (! $url) {
             // Demos must never silently die: auto-retry with backoff. Only alert the owner once
