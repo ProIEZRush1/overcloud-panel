@@ -242,6 +242,36 @@ class DeployService
     }
 
     /**
+     * Set a single runtime env var on the panel's OWN Coolify app (dedup first so Coolify's bulk append
+     * never piles up duplicates). Used by the keepalive to keep CLAUDE_CREDS_JSON current so a redeploy
+     * always re-seeds the build agent from a VALID (just-rotated) token instead of a stale snapshot.
+     */
+    public function updatePanelEnv(string $key, string $value): bool
+    {
+        if (! $this->isConfigured()) {
+            return false;
+        }
+        $c = config('overcloud.deploy');
+        $panel = (string) $c['panel_app_uuid'];
+        try {
+            $existing = Http::withToken($c['coolify_token'])->timeout(20)->get($c['coolify_url']."/applications/{$panel}/envs")->json();
+            foreach ((is_array($existing) ? $existing : []) as $e) {
+                if (($e['key'] ?? '') === $key && ! empty($e['uuid'])) {
+                    Http::withToken($c['coolify_token'])->timeout(15)->delete($c['coolify_url']."/applications/{$panel}/envs/{$e['uuid']}");
+                }
+            }
+            $r = Http::withToken($c['coolify_token'])->timeout(30)->patch($c['coolify_url']."/applications/{$panel}/envs/bulk",
+                ['data' => [['key' => $key, 'value' => $value, 'is_build_time' => false, 'is_preview' => false]]]);
+
+            return $r->successful();
+        } catch (\Throwable $e) {
+            Log::warning('updatePanelEnv failed', ['key' => $key, 'e' => $e->getMessage()]);
+
+            return false;
+        }
+    }
+
+    /**
      * Tear down an EXPIRED 5-day trial's infrastructure: the Coolify app, its dedicated Postgres and the
      * DNS record. Keeps the Project row in the panel (status flips to Cancelled) so the lead/history stays.
      */

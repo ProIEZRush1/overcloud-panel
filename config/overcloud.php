@@ -63,6 +63,9 @@ return [
         'verify_timeout' => (int) env('VERIFY_TIMEOUT', 2400),
         'app_node_ip' => env('APP_NODE_IP', '155.117.45.31'),
         'app_node_ssh_key_b64' => env('APP_NODE_SSH_KEY_B64'), // base64 of the Coolify private key
+        // The panel's OWN Coolify app uuid — so the keepalive can write the freshly-rotated Claude creds
+        // back into this app's CLAUDE_CREDS_JSON env (a stale snapshot is what logs the build agent out).
+        'panel_app_uuid' => env('PANEL_APP_UUID', 'oosja8agl7hp37x5b20dk8v8'),
         'default_stack' => env('DEFAULT_STACK', 'laravel-vue'),
 
         // Custom domains under overcloud.us via Cloudflare (falls back to sslip.io if unset).
