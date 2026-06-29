@@ -61,6 +61,7 @@ class DeployService
         // Apps / SaaS → a REAL Laravel + Vue app (login, admin panel, Postgres-backed permanent data).
         // Static/marketing sites keep the fast agentic/template path.
         $fullstack = $this->usesFullstack($project);
+        $bot = $this->usesBot($project); // a WhatsApp-bot product (clones the bot template + Baileys gateway)
         $custom = ! $fullstack && $this->usesCustomBuild($project, $stack);
         $dir = ($fullstack || $custom) ? storage_path('builds/'.$name) : null;
         $admin = $fullstack ? $this->ensureAdminCreds($project) : [];
@@ -68,20 +69,23 @@ class DeployService
         if ($fullstack) {
             // Verify the Laravel+Vue app actually rendered (Inertia mount present) — not the Flutter
             // markers pickStack would otherwise use, and not the business name (client-rendered).
-            $stackKey = 'laravel-vue';
+            $stackKey = $bot ? 'whatsapp-bot' : 'laravel-vue';
             $stack = ['kind' => 'app', 'markers' => ['id="app"'], 'port' => '8080'];
         }
 
         if ($fullstack) {
             $this->reportProgress($project, 0, $announce
-                ? "Estoy desarrollando {$label} como un *sistema completo* — con inicio de sesión, panel de administración y base de datos. 🛠️\n\n"
-                    ."📺 Puedes ver el avance en vivo aquí:\n".$this->progressUrl($project)
+                ? ($bot
+                    ? "Estoy construyendo tu *bot de WhatsApp* — con su panel de administración para que conectes tu WhatsApp y empiece a vender solo. 🤖\n\n📺 Avance en vivo:\n".$this->progressUrl($project)
+                    : "Estoy desarrollando {$label} como un *sistema completo* — con inicio de sesión, panel de administración y base de datos. 🛠️\n\n📺 Puedes ver el avance en vivo aquí:\n".$this->progressUrl($project))
                 : null);
-            if (! $this->agent->isAvailable() || ! $this->cloneRepo($c, $c['stacks']['laravel-vue']['repo'], $dir)) {
+            $templateRepo = $c['stacks'][$bot ? 'whatsapp-bot' : 'laravel-vue']['repo'];
+            if (! $this->agent->isAvailable() || ! $this->cloneRepo($c, $templateRepo, $dir)) {
                 return $this->fail($project, 'no se pudo construir el sistema');
             }
             $this->reportProgress($project, 1, '⚙️ Estoy programando tus módulos, tu panel de administración y conectando todo. Esto toma varios minutos.');
-            if (! $this->agent->buildFullstack($project, $dir, $admin)) {
+            $builtOk = $bot ? $this->agent->buildBot($project, $dir, $admin) : $this->agent->buildFullstack($project, $dir, $admin);
+            if (! $builtOk) {
                 return $this->fail($project, 'no se pudo construir el sistema');
             }
             $this->ensureMigrateOnStart($dir); // run migrations + seed on every boot (permanent Postgres)
@@ -163,6 +167,13 @@ class DeployService
                 // and https asset URLs behind the proxy.
                 'APP_NAME' => $business, 'ASSET_URL' => $url,
             ]);
+            if ($bot) {
+                // Shared secret between the Laravel app and the embedded Baileys gateway (same container).
+                $env['GATEWAY_TOKEN'] = (string) ($brief['db']['GATEWAY_TOKEN'] ?? Str::password(24, true, true, false));
+                $brief['bot'] = true;
+                $brief['connect_url'] = rtrim($url, '/').'/conectar';
+                $project->update(['brief' => $brief]);
+            }
             unset($env['DB_UUID']); // metadata for cleanup, not an app env var
             // Record the admin login URL so the delivery message hands over real access.
             $brief['admin'] = array_merge((array) ($brief['admin'] ?? []), ['url' => rtrim($url, '/').'/login']);
@@ -693,12 +704,30 @@ class DeployService
     /** Apps / SaaS / online stores → a REAL Laravel+Vue app (login, admin panel, Postgres data). */
     private function usesFullstack(Project $project): bool
     {
+        // A WhatsApp bot product is a full-stack app too (it just clones the bot template).
+        if ($this->usesBot($project)) {
+            return true;
+        }
         $brief = (array) ($project->brief ?? []);
         if (array_key_exists('fullstack', $brief)) {
             return (bool) $brief['fullstack'];
         }
 
         return in_array($project->lead?->service?->key, ['webapp', 'mobileapp', 'app', 'ecommerce'], true);
+    }
+
+    /** A WhatsApp-bot product: the client connects their own WhatsApp (Baileys QR) and the bot replies. */
+    private function usesBot(Project $project): bool
+    {
+        $brief = (array) ($project->brief ?? []);
+        if (array_key_exists('bot', $brief)) {
+            return (bool) $brief['bot'];
+        }
+        // Infer from what the client asked for (the funnel's summary/spec).
+        $needle = Str::lower(($project->lead?->summary ?? '').' '.($project->lead?->service_type ?? ''));
+
+        return str_contains($needle, 'bot de whatsapp') || str_contains($needle, 'chatbot')
+            || (str_contains($needle, 'bot') && str_contains($needle, 'whatsapp'));
     }
 
     /** Generate (once) and persist the admin login for a full-stack app; returns ['email','password']. */

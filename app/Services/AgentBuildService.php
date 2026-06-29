@@ -104,6 +104,18 @@ class AgentBuildService
             .'Siembra el usuario admin indicado en el DatabaseSeeder. Corre las migraciones, `npm run build`, y SIGUE EL PROTOCOLO DE VERIFICACIÓN: levanta la app, regístrate/inicia sesión y confirma que cada módulo guarda y lee datos reales. No termines hasta verificarlo.');
     }
 
+    /** Tailor the WhatsApp-bot template to the client's product (BotEngine sales flow + admin modules). */
+    public function buildBot(Project $project, string $dir, array $admin): bool
+    {
+        return $this->run($project->id, $dir, $this->context($project->lead, 'fullstack') + ['admin' => $admin],
+            'Esta carpeta YA es un *bot de WhatsApp* funcionando (Laravel + Vue): trae un gateway Baileys embebido en gateway/, una página "Conectar WhatsApp" con QR (/conectar), un webhook /api/wa/inbound, el servicio App\\Services\\BotEngine y modelos Plan/Pedido/Cliente/BotContact. '
+            .'NO rehagas ni rompas el gateway, la conexión por QR ni el webhook. EXTIÉNDELO para el negocio del cliente siguiendo CLAUDE.md: '
+            .'(1) Ajusta el FLUJO de App\\Services\\BotEngine para el producto del cliente (su catálogo/planes, preguntas frecuentes, captura de datos y cierre de venta), en español, natural y vendedor. '
+            .'(2) Adapta/crea los módulos del panel (planes, inventario, pedidos, clientes y los que pida el alcance) como CRUD real con datos persistentes en la base. '
+            .'(3) Brandéalo con el negocio (APP_NAME) — nada genérico. (4) Siembra datos de ejemplo realistas + el usuario admin indicado. '
+            .'(5) Corre `npm run build` y deja public/build commiteado. Sigue el PROTOCOLO DE VERIFICACIÓN, incluida una prueba del webhook POST /api/wa/inbound (un mensaje entrante debe generar respuesta del bot). No termines hasta verificarlo.');
+    }
+
     /** Repair a full-stack Laravel+Vue build that failed to deploy/run, using the deploy logs. */
     public function repairFullstack(Project $project, string $dir, string $logs, array $admin): bool
     {

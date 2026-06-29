@@ -50,6 +50,25 @@ class BillingService
         }
 
         $admin = (array) (($project->brief['admin'] ?? []));
+        $isBot = (bool) ($project->brief['bot'] ?? false);
+        // A WhatsApp-bot product is delivered as a TRIAL: the client opens the panel, scans the QR to
+        // link their OWN WhatsApp, and the bot starts selling. (You can't demo a bot as a static URL.)
+        if ($isBot) {
+            $connect = $project->brief['connect_url'] ?? (rtrim((string) $project->prod_url, '/').'/conectar');
+            $msg = '¡Tu *bot de WhatsApp* ya está listo, '.($project->lead?->name ?: '').'! 🤖🚀'."\n\n"
+                ."🌐 *Tu panel:* {$project->prod_url}\n";
+            if (! empty($admin['email'])) {
+                $msg .= '🔐 Acceso: '.$admin['email'].' / '.($admin['password'] ?? '')."\n";
+            }
+            $msg .= "\n📲 *Para activarlo (pruébalo en vivo):*\n"
+                ."1) Entra a *Conectar WhatsApp*: {$connect}\n"
+                ."2) En tu WhatsApp: *Dispositivos vinculados → Vincular un dispositivo* y escanea el QR\n"
+                ."3) ¡Listo! Tu bot empieza a atender y vender solo. Escríbele a tu número para probarlo. 🎉\n\n"
+                .'🔧 Cualquier ajuste al flujo o a tu catálogo, pídemelo por aquí y lo aplico.';
+            $this->gateway->sendText($account->session_name, $conv->contact_jid, $msg);
+
+            return;
+        }
         $msg = "¡Tu proyecto ya está en línea! 🚀\n🌐 *Tu sistema:* {$project->prod_url}\n";
         if (! empty($admin['email']) || ! empty($admin['user'])) {
             $loginUrl = $admin['url'] ?? (rtrim((string) $project->prod_url, '/').'/login');
