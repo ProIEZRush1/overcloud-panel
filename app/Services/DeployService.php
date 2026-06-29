@@ -83,7 +83,7 @@ class DeployService
             if (! $this->agent->isAvailable() || ! $this->cloneRepo($c, $templateRepo, $dir)) {
                 return $this->fail($project, 'no se pudo construir el sistema');
             }
-            $this->reportProgress($project, 1, '⚙️ Estoy programando tus módulos, tu panel de administración y conectando todo. Esto toma varios minutos.');
+            $this->reportProgress($project, 1, $announce ? '⚙️ Estoy programando tus módulos, tu panel de administración y conectando todo. Esto toma varios minutos.' : null);
             $builtOk = $bot ? $this->agent->buildBot($project, $dir, $admin) : $this->agent->buildFullstack($project, $dir, $admin);
             if (! $builtOk) {
                 return $this->fail($project, 'no se pudo construir el sistema');
@@ -216,8 +216,11 @@ class DeployService
             }
 
             Log::warning('Deploy attempt failed', ['project' => $project->id, 'attempt' => $attempt, 'reason' => $verdict['reason']]);
-            if ($attempt < (int) $c['max_attempts']) {
+            // Tell the client we're polishing it — but ONLY ONCE ever (across all attempts AND job
+            // retries), never on every retry, or it spams "afinando unos detalles" repeatedly.
+            if ($attempt < (int) $c['max_attempts'] && empty($project->fresh()->brief['polishing_sent'])) {
                 $this->notify($project, "Estoy afinando unos detalles para que {$label} quede perfecto. 🔧");
+                $project->update(['brief' => array_merge((array) ($project->fresh()->brief ?? []), ['polishing_sent' => true])]);
             }
             // Let Claude Code repair the repo from the deploy logs before retrying (self-heal).
             $logs = $this->fetchLogs($c, $depUuid);
