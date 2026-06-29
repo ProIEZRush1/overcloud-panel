@@ -35,7 +35,10 @@ Artisan::command('ai:keepalive', function (Assistant $assistant) {
     }
 })->purpose('Refresh the Claude CLI token + keep the env snapshot current so the build agent never lapses');
 
-Schedule::command('ai:keepalive')->everyTwoHours()->withoutOverlapping();
+// Every 30 min: the build agent shares one Claude account with the operator's laptop, which rotates the
+// refresh token; refreshing + re-snapshotting often keeps the env credential current so a redeploy never
+// re-seeds a stale (logged-out) token. (A dedicated API key would remove the sharing entirely.)
+Schedule::command('ai:keepalive')->everyThirtyMinutes()->withoutOverlapping();
 
 // Daily billing run: reminders, pause overdue projects, monthly maintenance.
 Schedule::command('payments:dunning')->dailyAt('09:00')->timezone('America/Mexico_City')->withoutOverlapping();
