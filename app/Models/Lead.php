@@ -20,13 +20,14 @@ class Lead extends Model
         'uuid', 'whatsapp_account_id', 'service_id', 'maintenance_plan_id', 'assigned_to_user_id',
         'name', 'phone', 'email', 'company', 'source',
         'stage', 'service_type', 'summary', 'requirements', 'pages', 'languages',
-        'budget_hint', 'deposit_percent', 'score', 'locale', 'notes', 'last_contact_at',
+        'budget_hint', 'deposit_percent', 'score', 'locale', 'notes', 'last_contact_at', 'meta',
     ];
 
     protected $casts = [
         'stage' => LeadStage::class,
         'requirements' => 'array',
         'languages' => 'array',
+        'meta' => 'array',
         'pages' => 'integer',
         'deposit_percent' => 'integer',
         'score' => 'integer',

@@ -334,11 +334,13 @@ class DeployService
         $name = $slug.'-demo-'.Str::lower(Str::random(4));
         $dir = storage_path('builds/'.$name);
 
+        $this->reportDemoProgress($lead, 1); // designing the demo with their brand
         if (! $this->agent->buildDemo($lead, $dir)
             || ! $this->createRepo($c, $name)
             || ! $this->pushDir($c, $dir, $name)) {
             return null;
         }
+        $this->reportDemoProgress($lead, 2); // publishing it online
 
         // Remove any previous demo app(s) for this client so the demo domain never collides
         // (re-running a demo used to leave stale apps fighting over <slug>-demo.overcloud.us).
@@ -1108,6 +1110,31 @@ class DeployService
     public function progressUrl(Project $project): string
     {
         return rtrim((string) config('app.url'), '/').'/progreso/'.$project->uuid;
+    }
+
+    /** Steps shown on the client's progress page while their pre-quote visual DEMO is being built. */
+    private const DEMO_STEPS = [
+        'Recibí tu visto bueno',
+        'Diseñando tu demo con tu marca',
+        'Publicándolo en línea',
+        '¡Tu demo está listo!',
+    ];
+
+    /** Drive the live progress page for a pre-quote demo (keyed on the LEAD, which has no project yet). */
+    public function reportDemoProgress(Lead $lead, int $idx, bool $done = false, bool $failed = false): void
+    {
+        try {
+            $meta = (array) ($lead->fresh()->meta ?? []);
+            $meta['progress'] = ['kind' => 'demo', 'steps' => self::DEMO_STEPS, 'idx' => $idx, 'done' => $done, 'failed' => $failed, 'updated_at' => now()->toIso8601String()];
+            $lead->update(['meta' => $meta]);
+        } catch (\Throwable $e) {
+        }
+    }
+
+    /** The public live-progress URL for a lead's pre-quote demo. */
+    public function progressUrlForLead(Lead $lead): string
+    {
+        return rtrim((string) config('app.url'), '/').'/progreso/'.$lead->uuid;
     }
 
     /**

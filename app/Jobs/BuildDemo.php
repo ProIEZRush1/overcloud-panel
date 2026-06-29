@@ -54,11 +54,21 @@ class BuildDemo implements ShouldQueue
                     ->onQueue('deploy')
                     ->delay(now()->addSeconds(60 * $this->attempt));
             } else {
+                $deploy->reportDemoProgress($lead, 2, false, true); // progress page shows a soft "still working"
                 $deploy->alertOwner('🎨 El demo de "'.($lead->company ?: $lead->name ?: ('lead #'.$lead->id))
                     .'" no quedó en línea tras '.self::MAX_ATTEMPTS.' intentos. Requiere revisión manual.');
             }
 
             return; // never surface an error to the client
+        }
+
+        // Demo is live → finish the progress page (and stamp the URL so its button opens the demo).
+        $deploy->reportDemoProgress($lead, 3, true);
+        try {
+            $meta = (array) $lead->fresh()->meta;
+            $meta['progress']['url'] = $url;
+            $lead->update(['meta' => $meta]);
+        } catch (\Throwable $e) {
         }
 
         $conv = $lead->conversations()->where('is_group', false)->first();

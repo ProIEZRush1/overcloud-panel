@@ -595,17 +595,20 @@ class BotResponder
     private function startDemo(Conversation $conversation, Lead $lead): ?Message
     {
         $lead->update(['stage' => LeadStage::Negotiating]);
+        $linkLine = '';
         if (config('overcloud.deploy.enabled')) {
             // Reserve the domain right away so DNS propagates while the demo builds — the SAME
             // unique per-lead subdomain that deployDemo() will assign (no cross-client collision).
             $deploy = app(DeployService::class);
             $deploy->reserveDomain($deploy->demoSubdomain($lead));
+            $deploy->reportDemoProgress($lead, 0);
             BuildDemo::dispatch($lead->id)->onQueue('deploy');
+            $linkLine = "\n\n📺 Puedes ver el avance en vivo aquí:\n".$deploy->progressUrlForLead($lead);
         }
 
         return $this->send($conversation,
             '¡Perfecto! 🙌 Antes de pasarte la cotización te voy a armar un *demo visual* de cómo se vería tu proyecto, para que lo veas en vivo. '
-            .'Dame un par de minutos y te comparto el enlace por aquí. 🎨');
+            .'Dame un par de minutos y te comparto el enlace por aquí. 🎨'.$linkLine);
     }
 
     /** Demo stage: when the client loves the demo, send the quote. */
