@@ -58,6 +58,11 @@ return [
         // Agentic build budget. A full-stack app (modules + admin + npm build + server e2e + self-repair)
         // needs well over the old 1500s — that timeout was killing the agent mid-verification.
         'build_timeout' => (int) env('BUILD_TIMEOUT', 2700),
+        // Post-deploy autonomous QA: a Claude Code agent E2E-tests the LIVE app (login, connect, modules)
+        // and self-heals failures before delivery. Needs SSH into the app node to read real logs.
+        'verify_timeout' => (int) env('VERIFY_TIMEOUT', 2400),
+        'app_node_ip' => env('APP_NODE_IP', '155.117.45.31'),
+        'app_node_ssh_key_b64' => env('APP_NODE_SSH_KEY_B64'), // base64 of the Coolify private key
         'default_stack' => env('DEFAULT_STACK', 'laravel-vue'),
 
         // Custom domains under overcloud.us via Cloudflare (falls back to sslip.io if unset).

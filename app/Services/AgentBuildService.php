@@ -116,6 +116,90 @@ class AgentBuildService
             .'(5) Corre `npm run build` y deja public/build commiteado. Sigue el PROTOCOLO DE VERIFICACIÓN, incluida una prueba del webhook POST /api/wa/inbound (un mensaje entrante debe generar respuesta del bot). No termines hasta verificarlo.');
     }
 
+    /**
+     * Post-deploy autonomous QA + self-heal. A Claude Code agent E2E-tests the LIVE app exactly like a
+     * human (real login, the connect/QR page, every module) and, if anything fails, reads the real
+     * server logs over SSH, fixes the root cause (patches the repo + redeploys, or the live container)
+     * and re-tests — looping until everything works. Returns true only when the agent confirms it.
+     */
+    public function verifyAndHeal(Project $project, string $url, array $admin, string $appUuid, string $repoDir, bool $isBot): bool
+    {
+        $c = config('overcloud.deploy');
+        $node = (string) ($c['app_node_ip'] ?? '');
+        $keyB64 = (string) ($c['app_node_ssh_key_b64'] ?? '');
+        $keyPath = '/home/builder/.ssh/appnode_'.$project->id;
+        $ssh = '(SSH no disponible — diagnostica con curl, rutas de diagnóstico temporales y los logs de Coolify)';
+        if ($keyB64 !== '' && $node !== '') {
+            try {
+                File::ensureDirectoryExists('/home/builder/.ssh');
+                File::put($keyPath, base64_decode($keyB64));
+                @chmod($keyPath, 0600);
+                Process::timeout(15)->run(['chown', '-R', 'builder:builder', '/home/builder/.ssh']);
+                $ssh = 'ssh -i '.$keyPath.' -o StrictHostKeyChecking=no -o ConnectTimeout=8 root@'.$node;
+            } catch (\Throwable $e) {
+            }
+        }
+        $resultFile = $repoDir.'/.verify_result';
+        @unlink($resultFile);
+        $email = $admin['email'] ?? '';
+        $pass = $admin['password'] ?? '';
+        $repoName = basename($repoDir);
+        $pushUrl = 'https://x-access-token:'.($c['github_token'] ?? '').'@github.com/'.($c['github_owner'] ?? '').'/'.$repoName.'.git';
+        $connectTest = $isBot
+            ? "3) CONECTAR WHATSAPP: curl {$url}/api/wa/qr → status \"qr\" con qrDataUrl (NO \"disconnected\" fijo; si lo está, el gateway debe revivir el QR a demanda)."
+            : '3) (sin módulo de WhatsApp para este producto)';
+        $task = <<<TASK
+        Eres el agente de QA + DevOps de Overcloud. El sistema del cliente ACABA de desplegarse en {$url}.
+        Tu trabajo: comprobar que TODO funciona DE VERDAD y, si algo falla, ARREGLARLO tú mismo y volver a
+        probar, repitiendo hasta que quede 100%. NUNCA des por bueno algo roto. Trabaja en silencio.
+
+        Credenciales admin: {$email} / {$pass}
+        Repo del cliente (para parchar): {$repoDir}
+          Para subir cambios: cd {$repoDir} && git add -A && git commit -m "fix: <qué>" && git push {$pushUrl} HEAD:main
+        Redeploy tras un push (espera ~4 min y reintenta, el contenedor tarda en reiniciar):
+          curl -s "{$c['coolify_url']}/deploy?uuid={$appUuid}&force=true" -H "Authorization: Bearer {$c['coolify_token']}"
+        Servidor de la app por SSH (LEE LOS LOGS REALES aquí — es como ves la causa raíz):
+          SSH={$ssh}
+          \$SSH "docker ps --format '{{.Names}}' | grep '^{$appUuid}' | head -1"   # nombre del contenedor (cambia cada deploy)
+          \$SSH "docker logs --tail 80 <cont>"    y    \$SSH "docker exec <cont> tail -40 /app/storage/logs/laravel.log"
+
+        PRUEBAS OBLIGATORIAS (todas deben pasar; usa curl -sS con un cookie-jar):
+        1) SALUD: curl {$url}/health → {"ok":true,...}
+        2) LOGIN REAL (lo más importante): GET {$url}/login guardando cookies; saca la cookie XSRF-TOKEN
+           (url-decoded); POST {$url}/login con email/password + headers  X-XSRF-TOKEN: <token>,
+           X-Requested-With: XMLHttpRequest, Referer: {$url}/login. Debe dar 200/302 (NO 500, NO 419) e ir a
+           /dashboard. Luego GET {$url}/dashboard con la sesión → 200, contiene id="app", SIN "Server Error"
+           y SIN ningún PHP Notice/Warning dentro del HTML.
+        {$connectTest}
+        4) MÓDULOS: con la sesión iniciada, abre cada enlace del menú (/planes, /numeros, /pedidos, /clientes,
+           /faqs, /conversaciones y los que existan) → ninguno debe dar 500.
+
+        Si algo falla: lee los logs reales por SSH, halla la CAUSA RAÍZ, corrígela (parcha {$repoDir} y haz
+        push + redeploy; para validar rápido también puedes arreglar el contenedor por SSH), y RE-PRUEBA desde
+        el paso 1. Repite hasta que las pruebas pasen.
+
+        Al terminar escribe en el archivo {$resultFile} EXACTAMENTE:
+          - "VERIFY_OK" si TODAS las pruebas pasan, o
+          - "VERIFY_FAIL: <causa breve>" si tras varios intentos no lo lograste.
+        TASK;
+
+        try {
+            $inner = 'cd '.escapeshellarg($repoDir).'; export DB_CONNECTION=sqlite; '
+                .'HOME=/home/builder claude -p '.escapeshellarg($task)
+                .' --dangerously-skip-permissions --output-format json';
+            Process::timeout((int) ($c['verify_timeout'] ?? 2400))->run(['su', 'builder', '-c', $inner]);
+        } catch (\Throwable $e) {
+            Log::warning('verifyAndHeal threw', ['id' => $project->id, 'e' => $e->getMessage()]);
+        } finally {
+            @unlink($keyPath);
+        }
+        $result = trim((string) @file_get_contents($resultFile));
+        @unlink($resultFile);
+        Log::info('verifyAndHeal result', ['id' => $project->id, 'result' => mb_substr($result, 0, 200)]);
+
+        return str_contains($result, 'VERIFY_OK');
+    }
+
     /** Repair a full-stack Laravel+Vue build that failed to deploy/run, using the deploy logs. */
     public function repairFullstack(Project $project, string $dir, string $logs, array $admin): bool
     {
@@ -292,7 +376,7 @@ class AgentBuildService
         - **APP_NAME = el nombre del negocio.** Escribe `APP_NAME="{$appName}"` en `.env` Y en `.env.production` (reemplaza la línea existente; no la dupliques), y cambia también el `'name' => env('APP_NAME', '…')` por defecto en `config/app.php` a `'{$appName}'` como respaldo. Así `config('app.name')` y `\$page.props.name` muestran "{$business}" en toda la app.
         - **Usa el nombre del negocio en la UI vía `\$page.props.name`** (no lo hardcodees en cada vista): título del navbar, encabezado del dashboard, `<title>` de las páginas, y el mensaje de bienvenida del login.
         - **ELIMINA el logo de Laravel.** Sobrescribe `resources/js/Components/ApplicationLogo.vue` por un **wordmark limpio**: el nombre del negocio (`\$page.props.name`) junto a una marca geométrica simple (un cuadrado/rombo redondeado o iniciales) pintada con el **degradado de marca**. PROHIBIDO el SVG del cubo "L" de Laravel en cualquier parte.
-        - **Tema visual (aplícalo en login, dashboard y layout autenticado):** moderno, profesional, dark-friendly. Degradado primario **#7c3aed → #c026d3** (morado a fucsia) para encabezados, botones primarios y el wordmark. Tarjetas `rounded-2xl`, sombras suaves (`shadow-lg`/`shadow-xl`), espaciado generoso, tipografía clara. Usa Tailwind (ya disponible). Botón primario sugerido: `bg-gradient-to-r from-[#7c3aed] to-[#c026d3] text-white rounded-xl px-4 py-2 shadow-lg hover:opacity-90`.
+        - **Tema visual ÚNICO para este cliente (NO copies el de otros clientes):** moderno, profesional, dark-friendly. **DERIVA una paleta propia del giro y la personalidad de {$business}** — elige TÚ 2 colores de marca (un primario + un acento) que peguen con su industria (p.ej. salud→verdes/teales, finanzas→azules/índigo, comida→naranjas/rojos, inmobiliaria→ámbar/esmeralda, tecnología→violetas/cian, etc.), y un degradado primario con ESOS colores. **Varía también el layout**: decide nav lateral vs superior, estilo de tarjetas (radio, sombra, borde), densidad y acentos, de modo que dos clientes distintos NO se vean iguales. Tarjetas redondeadas, sombras suaves, espaciado generoso, tipografía clara, Tailwind. Define los colores una vez (config Tailwind o variables CSS) y reúsalos en login, dashboard y layout. (Evita reusar el morado→fucsia #7c3aed/#c026d3 salvo que de verdad sea el color del cliente.)
         - **Login (`Pages/Auth/Login.vue`):** cabecera con el wordmark + un texto cálido en español tipo "Bienvenido a {$business}. Inicia sesión para administrar tu sistema." Labels y botones en español ("Correo", "Contraseña", "Recuérdame", "Iniciar sesión").
         - **Dashboard (`Pages/Dashboard.vue`):** REEMPLAZA por completo el "You're logged in!" por un panel real en español: saludo con el nombre del negocio, y **una tarjeta-resumen por módulo** (ícono/emoji del giro + conteo real de registros traído del controlador + enlace "Ver / Administrar"). Nada de texto placeholder.
         - **Navegación:** en `AuthenticatedLayout.vue` el menú (top o lateral) debe listar **TODOS los módulos del alcance** con etiquetas en español del giro del negocio (no "Items" genérico). Marca el activo.

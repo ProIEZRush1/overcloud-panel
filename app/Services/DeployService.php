@@ -204,6 +204,10 @@ class DeployService
                 $live = $this->verifyLiveApp($url);
                 if (! $live['ok']) {
                     $verdict = ['ok' => false, 'reason' => 'e2e en vivo: '.$live['reason']];
+                } elseif ($dir && ! $this->agent->verifyAndHeal($project, $url, $admin, $uuid, $dir, $bot)) {
+                    // Deep autonomous QA: the agent logs in for real, opens the connect/QR page and clicks
+                    // every module, self-healing anything broken. If it still can't pass, this attempt fails.
+                    $verdict = ['ok' => false, 'reason' => 'verificación E2E (login/conectar/módulos) no pasó'];
                 }
             }
             if ($verdict['ok']) {
