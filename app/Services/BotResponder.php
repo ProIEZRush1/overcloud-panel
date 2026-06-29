@@ -53,7 +53,7 @@ class BotResponder
 
         if ($conversation->is_group) {
             return $this->send($conversation, $this->composeGroup($conversation)
-                ?? 'Lo registro y el equipo lo revisa. 🙌');
+                ?? '¡Recibido! 🙌 Lo reviso y te respondo aquí mismo en un momento.');
         }
 
         return $this->funnel($conversation, $inbound);

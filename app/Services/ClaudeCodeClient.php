@@ -3,7 +3,9 @@
 namespace App\Services;
 
 use App\Contracts\Assistant;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Symfony\Component\Process\Process;
 
 /**
@@ -45,6 +47,19 @@ class ClaudeCodeClient implements Assistant
 
         try {
             $process->run();
+
+            // Self-heal a lapsed session: a redeploy wipes the run-as user's ~/.claude, logging the
+            // assistant out — which would otherwise degrade every bot reply to a canned fallback. If
+            // the call fails because we're logged out, re-seed creds from CLAUDE_CREDS_JSON and retry.
+            if (! $process->isSuccessful()
+                && Str::contains(Str::lower($process->getErrorOutput().$process->getOutput()), ['not logged in', 'please run /login'])
+                && $this->reseedCreds()) {
+                $process = $this->buildProcess([
+                    config('overcloud.ai.bin'), '-p', $prompt,
+                    '--append-system-prompt', $system, '--model', (string) config('overcloud.ai.model', 'sonnet'),
+                ]);
+                $process->run();
+            }
 
             if (! $process->isSuccessful()) {
                 Log::warning('Claude Code reply failed', ['err' => mb_substr($process->getErrorOutput(), 0, 400)]);
@@ -89,6 +104,32 @@ class ClaudeCodeClient implements Assistant
             Log::warning('Claude Code complete errored', ['e' => $e->getMessage()]);
 
             return null;
+        }
+    }
+
+    /** Re-seed the run-as user's Claude creds from CLAUDE_CREDS_JSON to recover a lapsed session. */
+    private function reseedCreds(): bool
+    {
+        $creds = (string) env('CLAUDE_CREDS_JSON', '');
+        if ($creds === '') {
+            return false;
+        }
+        $home = (string) config('overcloud.ai.home', '/home/builder');
+        $runAs = (string) config('overcloud.ai.run_as', '');
+        try {
+            File::ensureDirectoryExists($home.'/.claude');
+            File::put($home.'/.claude/.credentials.json', $creds);
+            @chmod($home.'/.claude/.credentials.json', 0600);
+            if ($runAs !== '') {
+                Process::fromShellCommandline('chown -R '.escapeshellarg($runAs.':'.$runAs).' '.escapeshellarg($home.'/.claude'))->run();
+            }
+            Log::warning('assistant session lapsed — re-seeded Claude creds from CLAUDE_CREDS_JSON');
+
+            return true;
+        } catch (\Throwable $e) {
+            Log::warning('assistant creds re-seed failed', ['e' => $e->getMessage()]);
+
+            return false;
         }
     }
 
