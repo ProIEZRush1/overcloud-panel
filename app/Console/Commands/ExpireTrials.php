@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Enums\ProjectStatus;
 use App\Models\Conversation;
+use App\Models\Lead;
 use App\Models\Project;
 use App\Services\DeployService;
 use App\Services\WhatsAppGateway;
@@ -64,7 +65,59 @@ class ExpireTrials extends Command
             }
         }
 
+        $this->expireDemos($deploy, $gateway);
+
         return self::SUCCESS;
+    }
+
+    /** Pre-quote DEMOS live on the lead (meta.demo) with no project — same 5-day tear-down rule. */
+    private function expireDemos(DeployService $deploy, WhatsAppGateway $gateway): void
+    {
+        $leads = Lead::whereNotNull('meta')->get()->filter(function (Lead $l) {
+            $demo = (array) ($l->meta['demo'] ?? []);
+
+            return ! empty($demo['expires_at']) && empty($demo['expired_at'])
+                // Skip leads that already converted to an active (paid/live) project.
+                && ! Project::where('lead_id', $l->id)->whereIn('status', ['live', 'maintenance', 'building'])->exists();
+        });
+
+        foreach ($leads as $lead) {
+            $meta = (array) $lead->meta;
+            $expiresAt = Carbon::parse($meta['demo']['expires_at']);
+
+            if (now()->greaterThanOrEqualTo($expiresAt)) {
+                $deploy->removeDemo($lead);
+                $meta['demo']['expired_at'] = now()->toIso8601String();
+                $meta['progress'] = null;
+                $lead->update(['meta' => $meta]);
+                $this->notifyLead($gateway, $lead,
+                    'Tu *demo* de 5 días terminó y lo cerré por ahora. 🙂 Si quieres retomarlo y arrancar tu proyecto, escríbeme y lo reactivo enseguida.');
+                $deploy->alertOwner('⌛ Demo (lead) expirado a los 5 días: "'.($lead->company ?: $lead->name ?: ('lead '.$lead->id)).'". Eliminado; registro conservado.');
+                Log::info('lead demo expired + torn down', ['lead' => $lead->id]);
+
+                continue;
+            }
+
+            if (empty($meta['demo']['reminded']) && now()->greaterThanOrEqualTo($expiresAt->copy()->subDay())) {
+                $this->notifyLead($gateway, $lead,
+                    '⏳ Tu *demo* termina mañana. Si te gustó cómo se ve, dime y te paso la *cotización* para dejarlo fijo y arrancar. 🙌');
+                $meta['demo']['reminded'] = true;
+                $lead->update(['meta' => $meta]);
+            }
+        }
+    }
+
+    private function notifyLead(WhatsAppGateway $gateway, Lead $lead, string $message): void
+    {
+        $conv = Conversation::where('lead_id', $lead->id)->where('is_group', false)->first();
+        $account = $conv?->whatsappAccount;
+        if ($conv && $account) {
+            try {
+                $gateway->sendText($account->session_name, $conv->contact_jid, $message);
+            } catch (\Throwable $e) {
+                Log::warning('demo expiry notify failed', ['lead' => $lead->id, 'e' => $e->getMessage()]);
+            }
+        }
     }
 
     private function notifyClient(WhatsAppGateway $gateway, Project $project, string $message): void

@@ -63,10 +63,12 @@ class BuildDemo implements ShouldQueue
         }
 
         // Demo is live → finish the progress page (and stamp the URL so its button opens the demo).
+        // Also start its 5-day clock so trials:expire tears the demo down if the lead doesn't convert.
         $deploy->reportDemoProgress($lead, 3, true);
         try {
             $meta = (array) $lead->fresh()->meta;
             $meta['progress']['url'] = $url;
+            $meta['demo'] = ['url' => $url, 'delivered_at' => now()->toIso8601String(), 'expires_at' => now()->addDays(5)->toIso8601String()];
             $lead->update(['meta' => $meta]);
         } catch (\Throwable $e) {
         }
@@ -74,7 +76,8 @@ class BuildDemo implements ShouldQueue
         $conv = $lead->conversations()->where('is_group', false)->first();
         $account = $conv?->whatsappAccount;
         if ($conv && $account) {
-            $text = "¡Aquí está tu *demo*! 🎨 Mira cómo se vería tu proyecto en vivo:\n{$url}\n\n¿Qué te parece? Si te late, te paso la *cotización* para arrancar. ✅";
+            $text = "¡Aquí está tu *demo*! 🎨 Mira cómo se vería tu proyecto en vivo:\n{$url}\n\n"
+                ."⏳ Este demo está disponible *5 días* para que lo revises sin costo. Si te late, te paso la *cotización* y lo dejamos fijo. ✅\n\n¿Qué te parece?";
             $out = $conv->messages()->create([
                 'direction' => MessageDirection::Out,
                 'type' => MessageType::Text,
