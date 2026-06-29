@@ -64,8 +64,15 @@ class BillingService
                 ."1) Entra a *Conectar WhatsApp*: {$connect}\n"
                 ."2) En tu WhatsApp: *Dispositivos vinculados → Vincular un dispositivo* y escanea el QR\n"
                 ."3) ¡Listo! Tu bot empieza a atender y vender solo. Escríbele a tu número para probarlo. 🎉\n\n"
+                ."⏳ Esta *demo está activa 5 días* para que la pruebes sin costo. Si te gusta cómo vende, con tu pago la dejamos *fija y completa* y no pierdes nada. Si no, se cierra sola — sin compromiso.\n\n"
                 .'🔧 Cualquier ajuste al flujo o a tu catálogo, pídemelo por aquí y lo aplico.';
             $this->gateway->sendText($account->session_name, $conv->contact_jid, $msg);
+
+            // 5-day trial clock: trials:expire tears down the Coolify service if there's no payment by then.
+            $project->update(['brief' => array_merge((array) $project->brief, [
+                'trial' => true,
+                'trial_expires_at' => now()->addDays(5)->toIso8601String(),
+            ])]);
 
             return;
         }
@@ -114,6 +121,14 @@ class BillingService
         $project = $request->project ?? Project::where('lead_id', $request->lead_id)->latest()->first();
         if ($project && $project->paused_at) {
             $this->resumeProject($project);
+        }
+        // A trial client paid → it becomes the permanent, full version; trials:expire must never tear it down.
+        if ($project && ($project->brief['trial'] ?? false)) {
+            $project->update([
+                'brief' => array_merge((array) $project->brief, ['paid' => true]),
+                'maintenance_active' => true,
+            ]);
+            Log::info('trial converted to paid (kept permanently)', ['project' => $project->id]);
         }
         [$conv, $account] = $project ? $this->channel($project) : [null, null];
         $ref = Str::lower((string) $request->reference);

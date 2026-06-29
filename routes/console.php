@@ -31,3 +31,6 @@ Schedule::command('bot:monitor')->everyMinute()->withoutOverlapping();
 
 // Once a day, send ONE reminder to leads who went silent mid-funnel (re-engage warm prospects).
 Schedule::command('bot:followups')->dailyAt('11:00')->timezone('America/Mexico_City')->withoutOverlapping();
+
+// Enforce the 5-day demo policy: remind ~24h before, then tear down the Coolify service if still unpaid.
+Schedule::command('trials:expire')->dailyAt('10:00')->timezone('America/Mexico_City')->withoutOverlapping();

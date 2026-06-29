@@ -241,6 +241,33 @@ class DeployService
         return $this->fail($project, 'no pasó las pruebas tras varios intentos');
     }
 
+    /**
+     * Tear down an EXPIRED 5-day trial's infrastructure: the Coolify app, its dedicated Postgres and the
+     * DNS record. Keeps the Project row in the panel (status flips to Cancelled) so the lead/history stays.
+     */
+    public function expireTrialInfra(Project $project): void
+    {
+        if (! $this->isConfigured()) {
+            return;
+        }
+        $c = config('overcloud.deploy');
+        try {
+            if ($project->coolify_app_uuid) {
+                Http::withToken($c['coolify_token'])->timeout(30)
+                    ->delete($c['coolify_url'].'/applications/'.$project->coolify_app_uuid, ['delete_volumes' => true, 'delete_configurations' => true]);
+            }
+            $dbUuid = (string) ($project->brief['db']['DB_UUID'] ?? '');
+            if ($dbUuid !== '') {
+                Http::withToken($c['coolify_token'])->timeout(30)
+                    ->delete($c['coolify_url'].'/databases/'.$dbUuid, ['delete_volumes' => true, 'delete_configurations' => true]);
+            }
+            $this->deleteDns($c, $this->subdomainFor($project));
+            Log::info('expired trial infra torn down', ['project' => $project->id]);
+        } catch (\Throwable $e) {
+            Log::warning('expireTrialInfra failed', ['project' => $project->id, 'e' => $e->getMessage()]);
+        }
+    }
+
     /** Free a lost lead's demo: delete its Coolify app(s) and DNS record. Keeps the DB record intact. */
     public function removeDemo(Lead $lead): void
     {
