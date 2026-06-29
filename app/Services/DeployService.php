@@ -671,6 +671,21 @@ class DeployService
         if (! $env) {
             return;
         }
+        try {
+            // Coolify's envs/bulk APPENDS — calling it for an existing key creates a duplicate line in
+            // the container's .env (a real source of flaky config). Delete any existing copies of the
+            // keys we're about to set first, so each key appears exactly once.
+            $existing = Http::withToken($c['coolify_token'])->timeout(20)
+                ->get($c['coolify_url']."/applications/{$uuid}/envs")->json();
+            foreach ((is_array($existing) ? $existing : []) as $e) {
+                if (isset($e['key'], $e['uuid']) && array_key_exists($e['key'], $env)) {
+                    Http::withToken($c['coolify_token'])->timeout(15)
+                        ->delete($c['coolify_url']."/applications/{$uuid}/envs/{$e['uuid']}");
+                }
+            }
+        } catch (\Throwable $e) {
+            // best-effort dedup; still try to set below
+        }
         $data = ['data' => []];
         foreach ($env as $k => $v) {
             $data['data'][] = ['key' => (string) $k, 'value' => (string) $v, 'is_preview' => false];
