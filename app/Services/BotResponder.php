@@ -568,7 +568,12 @@ class BotResponder
 
         ApplyChange::dispatch($project->id, $instruction)->onQueue('deploy');
 
-        return $this->send($conversation, '¡Claro! 🙌 Aplico ese cambio en tu sitio y te aviso en cuanto quede actualizado. 🔧');
+        // Give the client a live progress link for the change, just like an initial build.
+        $deploy = app(DeployService::class);
+        $deploy->reportChangeProgress($project, 0);
+
+        return $this->send($conversation, '¡Claro! 🙌 Aplico ese cambio en tu sitio y te aviso en cuanto quede actualizado. 🔧'
+            ."\n\n📺 Puedes ver el avance en vivo aquí:\n".$deploy->progressUrl($project));
     }
 
     /** Scope stage: wait for the client to confirm the alcance before quoting. */

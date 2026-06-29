@@ -939,6 +939,7 @@ class DeployService
         // Remember the known-good commit so a broken change can be rolled back off the LIVE site.
         $goodSha = $this->currentSha($dir);
 
+        $this->reportChangeProgress($project, 1); // applying the changes
         if (! $this->agent->isAvailable()
             || ! $this->agent->change($project, $dir, $instruction)
             || ! $this->dirHasChanges($dir)   // the agent must have actually edited something (no silent no-op)
@@ -946,11 +947,13 @@ class DeployService
             return false;
         }
 
+        $this->reportChangeProgress($project, 2); // publishing the update
         $stackKey = ((array) ($project->brief ?? []))['stack'] ?? $c['default_stack'];
         $stack = $c['stacks'][$stackKey] ?? $c['stacks'][$c['default_stack']];
         $content = ['business' => (string) ($project->lead?->company ?? '')];
         for ($i = 1; $i <= 3; $i++) {
             $dep = $this->triggerDeploy($c, $project->coolify_app_uuid);
+            $this->reportChangeProgress($project, 3); // verifying it works live
             if ($this->waitForLive($c, $dep, $project->prod_url, $content, $stack)['ok']) {
                 // Clear Cloudflare's edge cache so the client sees the change right away.
                 $this->purgeCache($c, $project->prod_url);
@@ -1064,6 +1067,15 @@ class DeployService
         '¡Tu sistema está listo!',
     ];
 
+    /** Steps shown on the client's progress page while a requested CHANGE is applied to a live site. */
+    private const CHANGE_STEPS = [
+        'Recibí tu cambio',
+        'Aplicando los cambios a tu sistema',
+        'Publicando la actualización en línea',
+        'Verificando que todo funcione',
+        '¡Tu cambio está listo!',
+    ];
+
     /** Record build progress on the project (drives the live progress page) and optionally DM the client. */
     private function reportProgress(Project $project, int $idx, ?string $message = null, bool $done = false): void
     {
@@ -1078,8 +1090,22 @@ class DeployService
         }
     }
 
-    /** The public live-progress URL the client can open to watch their system being built. */
-    private function progressUrl(Project $project): string
+    /**
+     * Drive the SAME live progress page for a requested change (kind='change' so the page doesn't
+     * shortcut to "done" just because the project is already live). Used by applyChange + ApplyChange.
+     */
+    public function reportChangeProgress(Project $project, int $idx, bool $done = false): void
+    {
+        try {
+            $brief = (array) ($project->fresh()->brief ?? []);
+            $brief['progress'] = ['kind' => 'change', 'steps' => self::CHANGE_STEPS, 'idx' => $idx, 'done' => $done, 'failed' => false, 'updated_at' => now()->toIso8601String()];
+            $project->update(['brief' => $brief]);
+        } catch (\Throwable $e) {
+        }
+    }
+
+    /** The public live-progress URL the client can open to watch their system being built or updated. */
+    public function progressUrl(Project $project): string
     {
         return rtrim((string) config('app.url'), '/').'/progreso/'.$project->uuid;
     }

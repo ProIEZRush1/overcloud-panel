@@ -21,7 +21,9 @@ class ProgressController extends Controller
             '¡Tu sistema está listo!',
         ];
         $current = (int) ($progress['idx'] ?? 0);
-        $done = (bool) ($progress['done'] ?? false) || $project->status?->value === 'live';
+        // A change runs on an already-live site, so don't let status=live shortcut it to "done".
+        $isChange = ($progress['kind'] ?? '') === 'change';
+        $done = (bool) ($progress['done'] ?? false) || (! $isChange && $project->status?->value === 'live');
         $failed = ! $done && (bool) ($progress['failed'] ?? false);
         $pct = $done ? 100 : (int) min(96, round(($current / max(1, count($steps) - 1)) * 100));
 
