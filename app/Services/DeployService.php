@@ -167,6 +167,10 @@ class DeployService
                 // Branded UI: the template's login/dashboard show the business name (config('app.name'))
                 // and https asset URLs behind the proxy.
                 'APP_NAME' => $business, 'ASSET_URL' => $url,
+                // A demo is delivered as a 5-day TRIAL with the revenue/selling features LOCKED until the
+                // anticipo is paid (the agent gates them on config('trial.locked')). onPaymentVerified
+                // flips this to false + redeploys to unlock — no rebuild.
+                'TRIAL_LOCKED' => (! empty($brief['demo']) || ! empty($brief['trial'])) && empty($brief['paid']) ? 'true' : 'false',
             ]);
             if ($bot) {
                 // Shared secret between the Laravel app and the embedded Baileys gateway (same container).
@@ -266,6 +270,42 @@ class DeployService
             return $r->successful();
         } catch (\Throwable $e) {
             Log::warning('updatePanelEnv failed', ['key' => $key, 'e' => $e->getMessage()]);
+
+            return false;
+        }
+    }
+
+    /** Set one runtime env var on ANY Coolify app (dedup first to avoid Coolify's bulk-append duplicates). */
+    private function setAppEnv(array $c, string $appUuid, string $key, string $value): void
+    {
+        $existing = Http::withToken($c['coolify_token'])->timeout(20)->get($c['coolify_url']."/applications/{$appUuid}/envs")->json();
+        foreach ((is_array($existing) ? $existing : []) as $e) {
+            if (($e['key'] ?? '') === $key && ! empty($e['uuid'])) {
+                Http::withToken($c['coolify_token'])->timeout(15)->delete($c['coolify_url']."/applications/{$appUuid}/envs/{$e['uuid']}");
+            }
+        }
+        Http::withToken($c['coolify_token'])->timeout(30)->patch($c['coolify_url']."/applications/{$appUuid}/envs/bulk",
+            ['data' => [['key' => $key, 'value' => $value, 'is_build_time' => false, 'is_preview' => false]]]);
+    }
+
+    /**
+     * Anticipo paid → unlock the trial: flip TRIAL_LOCKED=false on the client's app and redeploy so the
+     * revenue/selling features go live. No rebuild — the agent already built them gated on config('trial.locked').
+     */
+    public function unlockTrial(Project $project): bool
+    {
+        if (! $this->isConfigured() || ! $project->coolify_app_uuid) {
+            return false;
+        }
+        $c = config('overcloud.deploy');
+        try {
+            $this->setAppEnv($c, $project->coolify_app_uuid, 'TRIAL_LOCKED', 'false');
+            $this->triggerDeploy($c, $project->coolify_app_uuid);
+            Log::info('trial unlocked (anticipo paid)', ['project' => $project->id]);
+
+            return true;
+        } catch (\Throwable $e) {
+            Log::warning('unlockTrial failed', ['project' => $project->id, 'e' => $e->getMessage()]);
 
             return false;
         }

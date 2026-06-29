@@ -28,19 +28,33 @@ class ProjectService
 
         $account = $this->account($lead);
 
-        $project = Project::firstOrCreate(
-            ['quote_id' => $quote->id],
-            [
-                'lead_id' => $lead->id,
+        // Reuse the lead's existing DEMO/trial project (the full system the client already saw + loved)
+        // and link it to this quote — instead of building a second one. The caller then unlocks it.
+        $project = Project::where('lead_id', $lead->id)
+            ->whereNull('quote_id')
+            ->where('status', '!=', ProjectStatus::Cancelled->value)
+            ->latest('id')->first();
+        if ($project) {
+            $project->update([
+                'quote_id' => $quote->id,
                 'maintenance_plan_id' => $quote->maintenance_plan_id,
-                'whatsapp_account_id' => $account?->id,
-                'name' => ($lead->service?->name ?? 'Proyecto').' · '.($lead->name ?? 'Cliente'),
-                'slug' => Str::slug(($lead->name ?? 'proyecto').'-'.$quote->number),
-                'type' => $lead->service?->key,
-                'status' => ProjectStatus::Queued,
-                'started_at' => now(),
-            ]
-        );
+                'whatsapp_account_id' => $project->whatsapp_account_id ?: $account?->id,
+            ]);
+        } else {
+            $project = Project::firstOrCreate(
+                ['quote_id' => $quote->id],
+                [
+                    'lead_id' => $lead->id,
+                    'maintenance_plan_id' => $quote->maintenance_plan_id,
+                    'whatsapp_account_id' => $account?->id,
+                    'name' => ($lead->service?->name ?? 'Proyecto').' · '.($lead->name ?? 'Cliente'),
+                    'slug' => Str::slug(($lead->name ?? 'proyecto').'-'.$quote->number),
+                    'type' => $lead->service?->key,
+                    'status' => ProjectStatus::Queued,
+                    'started_at' => now(),
+                ]
+            );
+        }
 
         if (! $project->whatsapp_group_jid && $account) {
             $this->createGroup($project, $account);

@@ -9,9 +9,9 @@ use App\Enums\MessageDirection;
 use App\Enums\MessageStatus;
 use App\Enums\MessageType;
 use App\Enums\PaymentStatus;
+use App\Enums\ProjectStatus;
 use App\Enums\QuoteStatus;
 use App\Jobs\ApplyChange;
-use App\Jobs\BuildDemo;
 use App\Jobs\DeployProject;
 use App\Jobs\RemoveDemo;
 use App\Models\Conversation;
@@ -235,9 +235,7 @@ class BotResponder
                 }
                 if ($action === 'adjust') {
                     $this->captureFeedback($lead, $body);
-                    if (config('overcloud.deploy.enabled')) {
-                        BuildDemo::dispatch($lead->id)->onQueue('deploy');
-                    }
+                    $this->rebuildDemoWithFeedback($lead, $body);
                 }
 
                 return $say();
@@ -595,20 +593,62 @@ class BotResponder
     private function startDemo(Conversation $conversation, Lead $lead): ?Message
     {
         $lead->update(['stage' => LeadStage::Negotiating]);
-        $linkLine = '';
-        if (config('overcloud.deploy.enabled')) {
-            // Reserve the domain right away so DNS propagates while the demo builds — the SAME
-            // unique per-lead subdomain that deployDemo() will assign (no cross-client collision).
-            $deploy = app(DeployService::class);
-            $deploy->reserveDomain($deploy->demoSubdomain($lead));
-            $deploy->reportDemoProgress($lead, 0);
-            BuildDemo::dispatch($lead->id)->onQueue('deploy');
-            $linkLine = "\n\n📺 Puedes ver el avance en vivo aquí:\n".$deploy->progressUrlForLead($lead);
+        if (! config('overcloud.deploy.enabled')) {
+            return $this->send($conversation, '¡Perfecto! 🙌 Te preparo tu sistema y te aviso aquí en un momento.');
         }
 
+        // The demo IS the full REAL system, delivered as a 5-day TRIAL with the selling/revenue features
+        // locked until the anticipo. Build it through the real pipeline (branding + Postgres + verify+heal).
+        $project = $this->ensureDemoProject($lead);
+        DeployProject::dispatch($project->id)->onQueue('deploy');
+
         return $this->send($conversation,
-            '¡Perfecto! 🙌 Antes de pasarte la cotización te voy a armar un *demo visual* de cómo se vería tu proyecto, para que lo veas en vivo. '
-            .'Dame un par de minutos y te comparto el enlace por aquí. 🎨'.$linkLine);
+            '¡Perfecto! 🙌 Te voy a armar tu *sistema completo* — real y funcional — para que lo veas y lo pruebes en vivo. '
+            ."Podrás explorarlo TODO; solo lo de *cobrar y vender* se activa con tu anticipo. Tarda unos minutos.\n\n"
+            ."📺 Mira el avance en vivo aquí:\n".app(DeployService::class)->progressUrl($project));
+    }
+
+    /** The lead's current demo/trial Project (the full build), creating it on first demo. */
+    private function ensureDemoProject(Lead $lead): Project
+    {
+        $project = Project::where('lead_id', $lead->id)
+            ->whereNull('delivered_at')
+            ->where('status', '!=', ProjectStatus::Cancelled->value)
+            ->latest('id')->first();
+        if ($project) {
+            return $project;
+        }
+        $accountId = $lead->conversations()->whereNotNull('whatsapp_account_id')->value('whatsapp_account_id');
+
+        return Project::create([
+            'lead_id' => $lead->id,
+            'whatsapp_account_id' => $accountId,
+            'name' => ($lead->service?->name ?? 'Proyecto').' · '.($lead->name ?? 'Cliente'),
+            'slug' => Str::slug(($lead->name ?? 'proyecto').'-'.Str::lower(Str::random(5))),
+            'type' => $lead->service?->key,
+            'status' => ProjectStatus::Queued,
+            'started_at' => now(),
+            'brief' => ['demo' => true, 'trial' => true],
+        ]);
+    }
+
+    /**
+     * Client gave demo feedback ("colores neutros", "estilo Expedia"…). If the demo is already live,
+     * apply it as a change (rebuild + redeploy, with its own progress link); if it's still building,
+     * captureFeedback already stored it and the in-flight build will include it.
+     */
+    private function rebuildDemoWithFeedback(Lead $lead, string $feedback): void
+    {
+        if (! config('overcloud.deploy.enabled')) {
+            return;
+        }
+        $project = Project::where('lead_id', $lead->id)
+            ->whereNull('delivered_at')
+            ->where('status', '!=', ProjectStatus::Cancelled->value)
+            ->latest('id')->first();
+        if ($project && $project->repo_url && $project->coolify_app_uuid) {
+            ApplyChange::dispatch($project->id, $feedback)->onQueue('deploy');
+        }
     }
 
     /** Demo stage: when the client loves the demo, send the quote. */
@@ -621,8 +661,8 @@ class BotResponder
         // Capture the requested change and, when it's a concrete adjustment, REBUILD the demo so it
         // actually shows up — instead of only acknowledging it (the old behavior lost the change).
         $this->captureFeedback($lead, $text);
-        if (config('overcloud.deploy.enabled') && $this->mentionsAdjustment($text)) {
-            BuildDemo::dispatch($lead->id)->onQueue('deploy');
+        if ($this->mentionsAdjustment($text)) {
+            $this->rebuildDemoWithFeedback($lead, $text);
         }
 
         return $this->send($conversation, $this->claudeOr($conversation,

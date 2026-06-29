@@ -51,6 +51,30 @@ class BillingService
 
         $admin = (array) (($project->brief['admin'] ?? []));
         $isBot = (bool) ($project->brief['bot'] ?? false);
+        $isDemo = (bool) ($project->brief['demo'] ?? false);
+
+        // DEMO = the full REAL system delivered as a 5-day TRIAL with the selling/revenue features locked
+        // (config('trial.locked')) until the anticipo. Hand over full access + explain the lock + the clock.
+        if ($isDemo && ! ($project->brief['paid'] ?? false)) {
+            $project->update(['brief' => array_merge((array) $project->brief, [
+                'trial' => true,
+                'trial_expires_at' => now()->addDays(5)->toIso8601String(),
+            ])]);
+            $name = $project->lead?->name ?: '';
+            $msg = '¡Tu *sistema completo* ya está en vivo'.($name ? ', '.$name : '').'! 🎉'."\n\n🌐 {$project->prod_url}\n";
+            if (! empty($admin['email'])) {
+                $msg .= '🔐 '.$admin['email'].' / '.($admin['password'] ?? '')."\n";
+            }
+            if ($isBot) {
+                $connect = $project->brief['connect_url'] ?? (rtrim((string) $project->prod_url, '/').'/conectar');
+                $msg .= '📲 Conectar WhatsApp: '.$connect."\n";
+            }
+            $msg .= "\nExplóralo TODO 🙌 — está hecho a la medida de tu negocio. Las funciones para *cobrar y vender* están bloqueadas 🔒; se activan al confirmar tu proyecto con el *anticipo* (y así queda fijo para siempre).\n\n"
+                .'⏳ Tu demo está disponible *5 días*. Para apartarlo y *activar todo*, dime *va* y te paso tu cotización con el anticipo. 💰';
+            $this->gateway->sendText($account->session_name, $conv->contact_jid, $msg);
+
+            return;
+        }
         // A WhatsApp-bot product is delivered as a TRIAL: the client opens the panel, scans the QR to
         // link their OWN WhatsApp, and the bot starts selling. (You can't demo a bot as a static URL.)
         if ($isBot) {
