@@ -7,6 +7,7 @@ use App\Enums\ProjectStatus;
 use App\Models\Lead;
 use App\Models\Project;
 use App\Models\WhatsAppAccount;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
@@ -1096,7 +1097,14 @@ class DeployService
         } catch (\Throwable $e) {
         }
         Log::error('Autodeploy failed', ['project' => $project->id, 'why' => $why]);
-        $this->alertOwner('🚧 Falló el despliegue de "'.$this->projectLabel($project).'" — '.$why.'. Revísalo en el panel.');
+        // Alert the owner ONCE per project (not on every retry / job re-run) — repeated identical
+        // "deploy failed, manual review" pings are spam (and stay stale even after it later succeeds).
+        $brief = (array) ($project->fresh()->brief ?? []);
+        $alertedAt = $brief['alerted_at'] ?? null;
+        if (! $alertedAt || now()->diffInHours(Carbon::parse($alertedAt)) >= 12) {
+            $this->alertOwner('🚧 Falló el despliegue de "'.$this->projectLabel($project).'" — '.$why.'. Revísalo en el panel.');
+            $project->update(['brief' => array_merge($brief, ['alerted_at' => now()->toIso8601String()])]);
+        }
 
         return null;
     }

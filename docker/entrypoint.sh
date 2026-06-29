@@ -12,6 +12,10 @@ mkdir -p storage/framework/cache storage/framework/sessions storage/framework/vi
 php artisan migrate --force --seed
 php artisan storage:link || true
 php artisan cache:clear || true
+# Release any stale atomic locks (cache:clear does NOT touch the cache_locks table). A worker killed
+# mid-deploy can leave a ShouldBeUnique/deploy lock held for up to an hour, which silently turns every
+# re-dispatch into a no-op (the build looks "stuck queued"). A fresh container holds none legitimately.
+php artisan tinker --execute="try { \Illuminate\Support\Facades\DB::table('cache_locks')->delete(); } catch (\Throwable \$e) {}" 2>/dev/null || true
 php artisan config:cache
 
 # Non-root 'builder' user for headless Claude Code (it refuses --dangerously-skip-permissions as root).
