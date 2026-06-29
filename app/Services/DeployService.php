@@ -185,6 +185,15 @@ class DeployService
             $depUuid = $this->triggerDeploy($c, $uuid);
 
             $verdict = $this->waitForLive($c, $depUuid, $url, $content, $stack);
+            // For a full-stack app, "responding" is not enough — the BOT must confirm end-to-end on the
+            // LIVE url that the SPA renders, assets load over https, and the DB is reachable (login works,
+            // migrations ran, admin seeded). Only then is it truly delivered; otherwise repair + retry.
+            if ($verdict['ok'] && $fullstack) {
+                $live = $this->verifyLiveApp($url);
+                if (! $live['ok']) {
+                    $verdict = ['ok' => false, 'reason' => 'e2e en vivo: '.$live['reason']];
+                }
+            }
             if ($verdict['ok']) {
                 $project->update(['status' => ProjectStatus::Live, 'delivered_at' => now()]);
                 if ($fullstack) {
@@ -964,6 +973,41 @@ class DeployService
     private function progressUrl(Project $project): string
     {
         return rtrim((string) config('app.url'), '/').'/progreso/'.$project->uuid;
+    }
+
+    /**
+     * Post-deploy end-to-end check the BOT runs against the LIVE url (not a human): the SPA shell
+     * renders, compiled assets load over https (no blank page / mixed content), and /health proves
+     * the app reached its database, ran migrations and seeded the admin. Returns ['ok'=>bool,'reason'].
+     */
+    private function verifyLiveApp(string $url): array
+    {
+        $url = rtrim($url, '/');
+        try {
+            // 1) Login shell renders (Inertia mount present).
+            $login = Http::timeout(20)->get($url.'/login');
+            if (! $login->successful() || ! str_contains($login->body(), 'id="app"')) {
+                return ['ok' => false, 'reason' => 'login no renderiza ('.$login->status().')'];
+            }
+            // 2) A compiled asset referenced by the page loads over HTTPS (catches blank SPA / mixed content).
+            if (preg_match('#https?://[^"\']+/build/assets/[\w.-]+\.js#', $login->body(), $m)) {
+                if (str_starts_with($m[0], 'http://')) {
+                    return ['ok' => false, 'reason' => 'assets en http (mixed content)'];
+                }
+                if (! Http::timeout(20)->get($m[0])->successful()) {
+                    return ['ok' => false, 'reason' => 'assets 404'];
+                }
+            }
+            // 3) App reached its DB + migrations + seed (admin user exists).
+            $health = Http::timeout(20)->get($url.'/health');
+            if (! $health->successful() || $health->json('ok') !== true || (int) $health->json('users') < 1) {
+                return ['ok' => false, 'reason' => 'health/DB ('.$health->status().')'];
+            }
+
+            return ['ok' => true, 'reason' => 'ok'];
+        } catch (\Throwable $e) {
+            return ['ok' => false, 'reason' => Str::limit($e->getMessage(), 80)];
+        }
     }
 
     /** Best-effort progress message to the client's DM during the build/deploy. */
