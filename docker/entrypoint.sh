@@ -44,11 +44,13 @@ seed_creds /root/.claude ""
 seed_creds /home/builder/.claude builder
 mkdir -p storage/builds && chmod 777 storage/builds
 
-# Workers: a fast lane for bot replies, a separate slow lane for site deploys.
-php artisan queue:work --queue=default --tries=1 --sleep=2 --timeout=180 >> storage/logs/worker.log 2>&1 &
-php artisan queue:work --queue=deploy --tries=1 --sleep=3 --timeout=3600 >> storage/logs/deploy.log 2>&1 &
+# Workers: a fast lane for bot replies, a separate slow lane for site deploys. SUPERVISED — each
+# runs in an auto-respawn loop, so if a worker dies (OOM, a hung build, an uncaught error) it comes
+# back instead of silently halting the whole queue (which would freeze every client build/bot reply).
+( while true; do php artisan queue:work --queue=default --tries=1 --sleep=2 --timeout=180 --max-time=3600 >> storage/logs/worker.log 2>&1; echo "[entrypoint] default worker exited; restarting in 2s" >> storage/logs/worker.log; sleep 2; done ) &
+( while true; do php artisan queue:work --queue=deploy --tries=1 --sleep=3 --timeout=3600 --max-time=7200 >> storage/logs/deploy.log 2>&1; echo "[entrypoint] deploy worker exited; restarting in 2s" >> storage/logs/deploy.log; sleep 2; done ) &
 
-# Scheduler (daily billing/dunning run).
-php artisan schedule:work >> storage/logs/schedule.log 2>&1 &
+# Scheduler (daily billing/dunning run), also supervised.
+( while true; do php artisan schedule:work >> storage/logs/schedule.log 2>&1; sleep 2; done ) &
 
 exec php artisan serve --host 0.0.0.0 --port 8080
