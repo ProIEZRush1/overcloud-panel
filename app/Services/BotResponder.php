@@ -735,42 +735,6 @@ class BotResponder
             && ! Project::where('lead_id', $lead->id)->whereNotNull('prod_url')->exists();
     }
 
-    /**
-     * High-value / complex projects (voice-AI, telephony, multi-tenant SaaS, heavy integrations) must NOT
-     * be auto-quoted — the flat per-service price drastically UNDER-prices them. Hold and let the owner set
-     * the real price. meta.manual_quote is the explicit owner flag; the rest are scope signals.
-     */
-    private function needsManualQuote(Lead $lead): bool
-    {
-        if (! empty(((array) $lead->meta)['manual_quote'])) {
-            return true;
-        }
-        $spec = $lead->specs()->latest()->first();
-        $feats = collect($spec?->content['features'] ?? [])->map(fn ($f) => is_array($f) ? ($f['name'] ?? '') : $f)->implode(' ');
-        $hay = Str::lower(($lead->summary ?? '').' '.($spec?->title ?? '').' '.$feats);
-        foreach (['voz', 'llamad', 'telefon', 'recepcionista', 'call center', 'saas', 'suscrip', 'multi-tenant', 'multitenant', 'varios negocios', 'cada negocio', 'entren', 'twilio', 'elevenlabs', 'vonage', 'telnyx'] as $s) {
-            if (str_contains($hay, $s)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /** Hold a complex project for owner pricing: warm "afinando tu propuesta" to the client + alert owner. */
-    private function holdForManualQuote(Conversation $conversation, Lead $lead): ?Message
-    {
-        $meta = (array) $lead->meta;
-        $meta['manual_quote'] = true;
-        $meta['awaiting_manual_quote'] = true;
-        $lead->update(['meta' => $meta]);
-        app(DeployService::class)->alertOwner('💰 COTIZACIÓN MANUAL — el lead "'.($lead->company ?: $lead->name ?: ('#'.$lead->id))
-            .'" pidió un sistema robusto/complejo ('.Str::limit((string) $lead->summary, 120).'). El auto-cotizador lo SUBCOTIZA; pon el precio real tú antes de enviarlo.');
-
-        return $this->send($conversation, $this->claudeOr($conversation,
-            'Tu proyecto es robusto y a la medida 🙌 Estoy afinando los últimos detalles de tu *propuesta* para que sea justa con todo lo que incluye. En breve te la comparto por aquí. ✅'));
-    }
-
     /** Extract the business name + need from the chat (once) so the scope, quote and site are tailored. */
     private function captureLeadDetails(Conversation $conversation, Lead $lead): void
     {
@@ -802,12 +766,9 @@ class BotResponder
     /** Build + send the quote once the client confirmed the scope. */
     private function sendQuote(Conversation $conversation, Lead $lead): ?Message
     {
-        // NEVER quote before the client saw a demo, and NEVER auto-quote a complex project (under-prices it).
+        // NEVER quote before the client saw a demo. Pricing itself is computed by the AI per real scope.
         if ($this->shouldBuildDemoFirst($lead)) {
             return $this->startDemo($conversation, $lead);
-        }
-        if ($this->needsManualQuote($lead)) {
-            return $this->holdForManualQuote($conversation, $lead);
         }
         $spec = $lead->specs()->latest()->first() ?? $this->specs->buildFromLead($lead);
         $quote = $this->quotes->buildFromLead($lead, $spec, [
@@ -835,12 +796,6 @@ class BotResponder
         if (! $conv) {
             return;
         }
-        // A complex project must NOT get the (under-priced) auto-quote with its demo — hold for owner pricing.
-        if ($this->needsManualQuote($lead)) {
-            $this->holdForManualQuote($conv, $lead);
-
-            return;
-        }
         try {
             $spec = $lead->specs()->latest()->first() ?? $this->specs->buildFromLead($lead);
             $quote = $this->quotes->buildFromLead($lead, $spec, [
@@ -863,12 +818,9 @@ class BotResponder
     /** Accept → create the 40% deposit and send bank details. */
     private function sendBankDetails(Conversation $conversation, Lead $lead): ?Message
     {
-        // Belt-and-suspenders: no deposit before a demo, and no deposit on an un-priced complex project.
+        // Belt-and-suspenders: never take a deposit before the client has actually been shown a demo.
         if ($this->shouldBuildDemoFirst($lead)) {
             return $this->startDemo($conversation, $lead);
-        }
-        if ($this->needsManualQuote($lead)) {
-            return $this->holdForManualQuote($conversation, $lead);
         }
         $quote = $lead->quotes()->latest()->first();
         if (! $quote) {
