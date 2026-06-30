@@ -121,11 +121,13 @@ class AgentBuildService
      */
     public function buildFullstack(Project $project, string $dir, array $admin): bool
     {
+        $logoNote = $this->captureLeadLogo($project->lead, $dir);
         $ok = $this->run($project->id, $dir, $this->context($project->lead, 'fullstack') + ['admin' => $admin],
             'Esta carpeta YA es una app Laravel 13 + Inertia + Vue funcionando (con login/registro y base de datos). NO la rehagas desde cero: '
             .'EXTIÉNDELA para convertirla en el sistema del cliente siguiendo CLAUDE.md. Implementa CADA módulo del alcance como funcionalidad REAL de Laravel: '
             .'migración + modelo Eloquent + controlador + rutas protegidas por auth + páginas Inertia/Vue (resources/js/Pages) con tablas, formularios CRUD, búsqueda y filtros. '
             .'Crea un PANEL DE ADMINISTRACIÓN (dashboard tras login) con navegación a todos los módulos. Los datos DEBEN guardarse en la base de datos (persistentes), NUNCA en localStorage. '
+            .$logoNote
             .'Siembra el usuario admin indicado en el DatabaseSeeder. Corre las migraciones, `npm run build`, y SIGUE EL PROTOCOLO DE VERIFICACIÓN: levanta la app, regístrate/inicia sesión y confirma que cada módulo guarda y lee datos reales. No termines hasta verificarlo.');
 
         return $ok || $this->fullstackBuilt($dir);
@@ -145,12 +147,13 @@ class AgentBuildService
     /** Tailor the WhatsApp-bot template to the client's product (BotEngine sales flow + admin modules). */
     public function buildBot(Project $project, string $dir, array $admin): bool
     {
+        $logoNote = $this->captureLeadLogo($project->lead, $dir);
         $ok = $this->run($project->id, $dir, $this->context($project->lead, 'fullstack') + ['admin' => $admin],
             'Esta carpeta YA es un *bot de WhatsApp* funcionando (Laravel + Vue): trae un gateway Baileys embebido en gateway/, una página "Conectar WhatsApp" con QR (/conectar), un webhook /api/wa/inbound, el servicio App\\Services\\BotEngine y modelos Plan/Pedido/Cliente/BotContact. '
             .'NO rehagas ni rompas el gateway, la conexión por QR ni el webhook. EXTIÉNDELO para el negocio del cliente siguiendo CLAUDE.md: '
             .'(1) Ajusta el FLUJO de App\\Services\\BotEngine para el producto del cliente (su catálogo/planes, preguntas frecuentes, captura de datos y cierre de venta), en español, natural y vendedor. '
             .'(2) Adapta/crea los módulos del panel (planes, inventario, pedidos, clientes y los que pida el alcance) como CRUD real con datos persistentes en la base. '
-            .'(3) Brandéalo con el negocio (APP_NAME) — nada genérico. (4) Siembra datos de ejemplo realistas + el usuario admin indicado. '
+            .'(3) Brandéalo con el negocio (APP_NAME) — nada genérico. '.$logoNote.'(4) Siembra datos de ejemplo realistas + el usuario admin indicado. '
             .'(5) Corre `npm run build` y deja public/build commiteado. Sigue el PROTOCOLO DE VERIFICACIÓN, incluida una prueba del webhook POST /api/wa/inbound (un mensaje entrante debe generar respuesta del bot). No termines hasta verificarlo.');
 
         return $ok || $this->fullstackBuilt($dir);
@@ -252,8 +255,10 @@ class AgentBuildService
     /** Apply a client-requested change to an existing project checkout. */
     public function change(Project $project, string $dir, string $instruction): bool
     {
+        $logoNote = $this->captureLeadLogo($project->lead, $dir);
+
         return $this->run($project->id, $dir, $this->context($project->lead, 'change'),
-            'Aplica este cambio solicitado por el cliente: "'.$instruction.'". '
+            'Aplica este cambio solicitado por el cliente: "'.$instruction.'". '.$logoNote
             .'Sigue el PROTOCOLO DE VERIFICACIÓN de CLAUDE.md: primero EXPLORA el repo (ls/grep/cat) para ubicar el elemento EXACTO, aplícalo en todos los archivos relevantes, '
             .'y CONFIRMA sirviendo el sitio que el cambio realmente quedó reflejado. No termines hasta verificarlo.');
     }
@@ -272,8 +277,11 @@ class AgentBuildService
     }
 
     /** Pull the logo the client sent over WhatsApp into the demo build dir so the demo uses it, not a fake one. */
-    private function captureLeadLogo(Lead $lead, string $dir): string
+    private function captureLeadLogo(?Lead $lead, string $dir): string
     {
+        if (! $lead) {
+            return '';
+        }
         try {
             $convIds = Conversation::where('lead_id', $lead->id)->pluck('id');
             $msg = Message::whereIn('conversation_id', $convIds)
