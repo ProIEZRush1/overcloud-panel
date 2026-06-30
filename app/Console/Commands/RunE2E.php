@@ -79,6 +79,12 @@ class RunE2E extends Command
             $this->assert('  → demo real (DeployProject) en cola', $this->queued(DeployProject::class)
                 && Project::where('lead_id', $lead->id)->get()->contains(fn ($p) => ! empty(((array) $p->brief)['demo'])));
 
+            // Simulate the demo going LIVE (in production it deploys + gets a prod_url). The funnel now
+            // HARD-BLOCKS any quote/deposit until a demo was actually delivered, so without this the quote
+            // step would (correctly) bounce back into building the demo.
+            Project::where('lead_id', $lead->id)->latest('id')->first()
+                ?->update(['prod_url' => 'https://demo-e2e.overcloud.us', 'status' => ProjectStatus::Live]);
+
             // 4) Demo → quote (PDF)
             $r = $this->say($bot, 'Me encanta, pásame la cotización');
             $this->assert('demo gustó → *cotización*', $lead->fresh()->quotes()->exists() && $lead->fresh()->stage === LeadStage::Quoted);

@@ -720,7 +720,55 @@ class BotResponder
         $this->sendDoc($conversation, $spec->fresh()->pdf_path, 'Alcance.pdf');
 
         return $this->send($conversation,
-            'Revísalo con calma 🙌 Si está todo a tu gusto, *confírmame* y con eso te preparo la cotización 💰. Si quieres ajustar o agregar algo, dime y lo acomodo.');
+            'Revísalo con calma 🙌 Si está todo a tu gusto, *confírmame* y con eso te armo tu *demo* — tu sistema real y funcional para que lo veas en vivo. Si quieres ajustar o agregar algo, dime y lo acomodo.');
+    }
+
+    /**
+     * The demo IS the proof + the hook: a client must NEVER reach a quote or a deposit without having
+     * been shown a live demo first. If the funnel ever skips it (a bad AI route, a stage glitch), this
+     * forces the demo build instead of jumping to money. deploy disabled / meta.no_demo opts out.
+     */
+    private function shouldBuildDemoFirst(Lead $lead): bool
+    {
+        return (bool) config('overcloud.deploy.enabled')
+            && empty(((array) $lead->meta)['no_demo'])
+            && ! Project::where('lead_id', $lead->id)->whereNotNull('prod_url')->exists();
+    }
+
+    /**
+     * High-value / complex projects (voice-AI, telephony, multi-tenant SaaS, heavy integrations) must NOT
+     * be auto-quoted — the flat per-service price drastically UNDER-prices them. Hold and let the owner set
+     * the real price. meta.manual_quote is the explicit owner flag; the rest are scope signals.
+     */
+    private function needsManualQuote(Lead $lead): bool
+    {
+        if (! empty(((array) $lead->meta)['manual_quote'])) {
+            return true;
+        }
+        $spec = $lead->specs()->latest()->first();
+        $feats = collect($spec?->content['features'] ?? [])->map(fn ($f) => is_array($f) ? ($f['name'] ?? '') : $f)->implode(' ');
+        $hay = Str::lower(($lead->summary ?? '').' '.($spec?->title ?? '').' '.$feats);
+        foreach (['voz', 'llamad', 'telefon', 'recepcionista', 'call center', 'saas', 'suscrip', 'multi-tenant', 'multitenant', 'varios negocios', 'cada negocio', 'entren', 'twilio', 'elevenlabs', 'vonage', 'telnyx'] as $s) {
+            if (str_contains($hay, $s)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Hold a complex project for owner pricing: warm "afinando tu propuesta" to the client + alert owner. */
+    private function holdForManualQuote(Conversation $conversation, Lead $lead): ?Message
+    {
+        $meta = (array) $lead->meta;
+        $meta['manual_quote'] = true;
+        $meta['awaiting_manual_quote'] = true;
+        $lead->update(['meta' => $meta]);
+        app(DeployService::class)->alertOwner('💰 COTIZACIÓN MANUAL — el lead "'.($lead->company ?: $lead->name ?: ('#'.$lead->id))
+            .'" pidió un sistema robusto/complejo ('.Str::limit((string) $lead->summary, 120).'). El auto-cotizador lo SUBCOTIZA; pon el precio real tú antes de enviarlo.');
+
+        return $this->send($conversation, $this->claudeOr($conversation,
+            'Tu proyecto es robusto y a la medida 🙌 Estoy afinando los últimos detalles de tu *propuesta* para que sea justa con todo lo que incluye. En breve te la comparto por aquí. ✅'));
     }
 
     /** Extract the business name + need from the chat (once) so the scope, quote and site are tailored. */
@@ -754,6 +802,13 @@ class BotResponder
     /** Build + send the quote once the client confirmed the scope. */
     private function sendQuote(Conversation $conversation, Lead $lead): ?Message
     {
+        // NEVER quote before the client saw a demo, and NEVER auto-quote a complex project (under-prices it).
+        if ($this->shouldBuildDemoFirst($lead)) {
+            return $this->startDemo($conversation, $lead);
+        }
+        if ($this->needsManualQuote($lead)) {
+            return $this->holdForManualQuote($conversation, $lead);
+        }
         $spec = $lead->specs()->latest()->first() ?? $this->specs->buildFromLead($lead);
         $quote = $this->quotes->buildFromLead($lead, $spec, [
             'feature_ids' => $this->defaultFeatures($lead->service),
@@ -780,6 +835,12 @@ class BotResponder
         if (! $conv) {
             return;
         }
+        // A complex project must NOT get the (under-priced) auto-quote with its demo — hold for owner pricing.
+        if ($this->needsManualQuote($lead)) {
+            $this->holdForManualQuote($conv, $lead);
+
+            return;
+        }
         try {
             $spec = $lead->specs()->latest()->first() ?? $this->specs->buildFromLead($lead);
             $quote = $this->quotes->buildFromLead($lead, $spec, [
@@ -802,6 +863,13 @@ class BotResponder
     /** Accept → create the 40% deposit and send bank details. */
     private function sendBankDetails(Conversation $conversation, Lead $lead): ?Message
     {
+        // Belt-and-suspenders: no deposit before a demo, and no deposit on an un-priced complex project.
+        if ($this->shouldBuildDemoFirst($lead)) {
+            return $this->startDemo($conversation, $lead);
+        }
+        if ($this->needsManualQuote($lead)) {
+            return $this->holdForManualQuote($conversation, $lead);
+        }
         $quote = $lead->quotes()->latest()->first();
         if (! $quote) {
             return $this->send($conversation, 'Permíteme preparar tu propuesta y te confirmo. 🙌');
