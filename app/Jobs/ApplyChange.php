@@ -64,8 +64,11 @@ class ApplyChange implements ShouldQueue
             $account = $conv?->whatsappAccount;
             if ($ok && $conv && $account) {
                 $deploy->reportChangeProgress($project, 4, true); // progress page → "¡Tu cambio está listo!"
+                // ALWAYS tell the client WHAT changed + HOW to access it (the agent wrote the summary).
+                $summary = trim((string) ($project->fresh()->brief['change_summary'] ?? ''));
+                $what = $summary !== '' ? "\n\n{$summary}" : '';
                 $gateway->sendText($account->session_name, $conv->contact_jid,
-                    "¡Listo! ✅ Ya apliqué el cambio en tu sitio:\n{$project->prod_url}\n\n¿Algo más en lo que te ayude? 🙌");
+                    "¡Listo! ✅ Ya apliqué tu cambio.{$what}\n\n🌐 Para verlo, inicia sesión en tu sistema:\n{$project->prod_url}\n\n¿Algo más en lo que te ayude? 🙌");
                 $deploy->alertOwner('✅ Cambio aplicado en "'.$label.'": "'.$this->instruction.'". → '.$project->prod_url);
             } elseif (! $ok) {
                 // Keep the progress page honest (soft "still working" state, not frozen) + alert the OWNER.

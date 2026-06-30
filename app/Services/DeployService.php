@@ -1000,6 +1000,12 @@ class DeployService
             return false;
         }
 
+        // Capture the agent's client-facing summary (what changed + how to use it) for the "listo" message.
+        $summary = trim((string) @file_get_contents($dir.'/.change_summary'));
+        if ($summary !== '') {
+            $project->update(['brief' => array_merge((array) $project->fresh()->brief, ['change_summary' => mb_substr($summary, 0, 600)])]);
+        }
+
         $this->reportChangeProgress($project, 2); // publishing the update
         $stackKey = ((array) ($project->brief ?? []))['stack'] ?? $c['default_stack'];
         $stack = $c['stacks'][$stackKey] ?? $c['stacks'][$c['default_stack']];

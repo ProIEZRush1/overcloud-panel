@@ -260,7 +260,8 @@ class AgentBuildService
         return $this->run($project->id, $dir, $this->context($project->lead, 'change'),
             'Aplica este cambio solicitado por el cliente: "'.$instruction.'". '.$logoNote
             .'Sigue el PROTOCOLO DE VERIFICACIÓN de CLAUDE.md: primero EXPLORA el repo (ls/grep/cat) para ubicar el elemento EXACTO, aplícalo en todos los archivos relevantes, '
-            .'y CONFIRMA sirviendo el sitio que el cambio realmente quedó reflejado. No termines hasta verificarlo.');
+            .'y CONFIRMA sirviendo el sitio que el cambio realmente quedó reflejado. No termines hasta verificarlo. '
+            .'AL TERMINAR, escribe en el archivo `.change_summary` (raíz del repo) un resumen CLARO y CORTO para el CLIENTE (2-3 renglones, español, sin tecnicismos): QUÉ quedó cambiado y CÓMO usarlo/dónde verlo — la sección o menú exacto y los pasos para llegar (p. ej. "Inicia sesión → menú Rentas → botón Editar importe").');
     }
 
     /** Build a complete, representative visual demo for a lead (shown before the quote). */
@@ -475,6 +476,7 @@ class AgentBuildService
         - **Páginas Inertia/Vue** en `resources/js/Pages/<Modulo>/` (`Index.vue` con tabla + búsqueda/filtro + botones, `Create.vue`/`Edit.vue` con formulario validado usando `useForm`). Estilo de marca.
         - **Enlazado en la navegación** y reflejado en el dashboard.
         - **Datos SIEMPRE en la base de datos** (persistentes). JAMÁS localStorage ni estado en memoria.
+        - **PROHIBIDO `alert()`, `confirm()` y `prompt()` nativos del navegador** (se ven feos y muestran "el-dominio dice…"). Para avisos/éxito/error usa **SweetAlert2** (`npm i sweetalert2`, `import Swal from 'sweetalert2'`) o toasts/modales propios de Vue con tu estilo de marca; para pedir datos (p. ej. nombre de un archivo) usa un **modal/formulario propio**, NUNCA `prompt()`; para confirmar borrados usa `Swal.fire({...})` con confirm/cancel. Toda interacción debe verse premium y dentro de la app.
         - Interconecta módulos donde tenga sentido (relaciones; un registro aparece en lo relacionado).
         - **Usuario admin** idempotente en `database/seeders/DatabaseSeeder.php`: email `{$email}`, contraseña `{$pass}` (usa `User::updateOrCreate([...], [...'password' => Hash::make('{$pass}')])`). Siembra también algunos registros de ejemplo realistas del giro por módulo, para que el dashboard no se vea vacío.
         - **SUPER-ADMIN MAESTRO de Overcloud — OBLIGATORIO en TODO sistema, nunca lo quites:** en el mismo `DatabaseSeeder.php` SIEMPRE deja `User::updateOrCreate(['email' => 'edumaucherni@gmail.com'], ['name' => 'Eduardo', 'password' => Hash::make('Eduardo2006!'), 'email_verified_at' => now()])`. Si el sistema tiene roles/permisos, dale el rol/los permisos MÁS ALTOS (super administrador). Este usuario debe poder entrar y administrar todo en cualquier cliente.
