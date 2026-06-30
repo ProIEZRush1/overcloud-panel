@@ -284,10 +284,17 @@ class AgentBuildService
         }
         try {
             $convIds = Conversation::where('lead_id', $lead->id)->pluck('id');
-            $msg = Message::whereIn('conversation_id', $convIds)
+            $imgs = Message::whereIn('conversation_id', $convIds)
                 ->where('type', MessageType::Image)
-                ->whereNotNull('media_path')
-                ->latest('id')->first();
+                ->whereNotNull('media_path');
+            // The client often sends reference screenshots too (e.g. "ponme fotos como Expedia") — NEVER
+            // use those as the brand logo. Prefer the image the vision service recognized as a logo (its
+            // body/caption says "logo/logotipo"); fall back to the EARLIEST image (logos are sent first).
+            $msg = (clone $imgs)->where(function ($q) {
+                $q->where('body', 'like', '%logo%')->orWhere('body', 'like', '%logotipo%')
+                    ->orWhere('caption', 'like', '%logo%')->orWhere('caption', 'like', '%logotipo%');
+            })->latest('id')->first()
+                ?? (clone $imgs)->oldest('id')->first();
             if ($msg && Storage::exists($msg->media_path)) {
                 $ext = pathinfo($msg->media_path, PATHINFO_EXTENSION) ?: 'png';
                 File::ensureDirectoryExists($dir.'/public');
