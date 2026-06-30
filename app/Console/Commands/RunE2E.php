@@ -8,7 +8,6 @@ use App\Enums\MessageStatus;
 use App\Enums\MessageType;
 use App\Enums\ProjectStatus;
 use App\Jobs\ApplyChange;
-use App\Jobs\BuildDemo;
 use App\Jobs\DeployProject;
 use App\Models\Conversation;
 use App\Models\Lead;
@@ -73,10 +72,12 @@ class RunE2E extends Command
             $r = $this->say($bot, 'Sí, va');
             $this->assert('confirma → genera *alcance*', $lead->fresh()->specs()->exists());
 
-            // 3) Scope → demo (BuildDemo queued)
+            // 3) Scope → demo: the FULL real system is built via DeployProject as a locked trial
+            // (the old light BuildDemo is deprecated).
             $r = $this->say($bot, 'Está perfecto, arma el demo');
             $this->assert('alcance ok → *demo* (negotiating)', $lead->fresh()->stage === LeadStage::Negotiating);
-            $this->assert('  → BuildDemo en cola', $this->queued(BuildDemo::class));
+            $this->assert('  → demo real (DeployProject) en cola', $this->queued(DeployProject::class)
+                && Project::where('lead_id', $lead->id)->get()->contains(fn ($p) => ! empty(((array) $p->brief)['demo'])));
 
             // 4) Demo → quote (PDF)
             $r = $this->say($bot, 'Me encanta, pásame la cotización');
