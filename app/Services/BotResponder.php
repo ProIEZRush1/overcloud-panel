@@ -24,6 +24,7 @@ use App\Models\ServiceFeature;
 use App\Models\Spec;
 use App\Support\Money;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -760,6 +761,35 @@ class BotResponder
             "¡Excelente! 🙌 Con base en tu alcance, aquí tu *cotización* 💰\n\nEn el PDF (*{$quote->number}*) vienen todos los detalles y el plan de pagos. Revísala con calma y, si te late, *apruébala* para arrancar. ✅");
 
         return $this->sendDoc($conversation, $quote->fresh()->pdf_path, $quote->number.'.pdf');
+    }
+
+    /**
+     * Build + send the quote standalone — used to send it RIGHT when the first demo version is delivered,
+     * so the client sees the complete (locked) system AND its price + anticipo together.
+     */
+    public function sendQuoteForLead(Lead $lead): void
+    {
+        $conv = $lead->conversations()->where('is_group', false)->first();
+        if (! $conv) {
+            return;
+        }
+        try {
+            $spec = $lead->specs()->latest()->first() ?? $this->specs->buildFromLead($lead);
+            $quote = $this->quotes->buildFromLead($lead, $spec, [
+                'feature_ids' => $this->defaultFeatures($lead->service),
+                'pages' => $lead->pages ?: ($lead->service?->included_pages ?? 1),
+                'languages' => max(1, count($lead->languages ?? ['es'])),
+            ]);
+            $this->pdf->renderQuote($quote);
+            $quote->update(['status' => QuoteStatus::Sent, 'sent_at' => now()]);
+            $dep = Money::format($quote->deposit_cents, $quote->currency);
+            $this->send($conv,
+                "💰 Y aquí tu *cotización* (PDF *{$quote->number}*) — el detalle completo y el plan de pagos.\n\n"
+                ."Para *activar todo* (cobrar y vender) y dejar tu sistema *fijo para siempre*, aparta tu proyecto con el *anticipo del 40%*: {$dep}. Cuando quieras, dime *va* y te paso los datos de pago. ✅");
+            $this->sendDoc($conv, $quote->fresh()->pdf_path, $quote->number.'.pdf');
+        } catch (\Throwable $e) {
+            Log::warning('sendQuoteForLead failed', ['lead' => $lead->id, 'e' => $e->getMessage()]);
+        }
     }
 
     /** Accept → create the 40% deposit and send bank details. */

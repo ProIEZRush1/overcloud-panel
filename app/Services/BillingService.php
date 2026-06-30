@@ -70,8 +70,17 @@ class BillingService
                 $msg .= '📲 Conectar WhatsApp: '.$connect."\n";
             }
             $msg .= "\nExplóralo TODO 🙌 — está hecho a la medida de tu negocio. Las funciones para *cobrar y vender* están bloqueadas 🔒; se activan al confirmar tu proyecto con el *anticipo* (y así queda fijo para siempre).\n\n"
-                .'⏳ Tu demo está disponible *5 días*. Para apartarlo y *activar todo*, dime *va* y te paso tu cotización con el anticipo. 💰';
+                .'⏳ Tu demo está disponible *5 días*. Aquí abajo te dejo tu *cotización* para que, cuando quieras, lo dejes fijo. 💰';
             $this->gateway->sendText($account->session_name, $conv->contact_jid, $msg);
+
+            // Send the QUOTE right with the first demo version (the client sees the system + the price together).
+            if ($project->lead) {
+                try {
+                    app(BotResponder::class)->sendQuoteForLead($project->lead);
+                } catch (\Throwable $e) {
+                    Log::warning('demo quote send failed', ['project' => $project->id, 'e' => $e->getMessage()]);
+                }
+            }
 
             return;
         }

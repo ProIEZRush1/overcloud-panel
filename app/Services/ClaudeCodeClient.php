@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Contracts\Assistant;
+use App\Support\Ai;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -151,7 +152,7 @@ class ClaudeCodeClient implements Assistant
             if ($home !== '') {
                 $cmd .= ' && export HOME='.escapeshellarg($home);
             }
-            $cmd .= ' && '.implode(' ', array_map('escapeshellarg', $args));
+            $cmd .= ' && '.Ai::tokenExport().implode(' ', array_map('escapeshellarg', $args));
 
             return new Process(['su', $runAs, '-c', $cmd], base_path(), null, null, $timeout);
         }

@@ -30,6 +30,10 @@ return [
         // creds volume) so the OAuth token is refreshed in place and survives deploys. Prod: builder.
         'run_as' => env('CLAUDE_RUN_AS'),
         'home' => env('CLAUDE_HOME'),
+        // Long-lived subscription token (`claude setup-token`, valid ~1 year, does NOT rotate). When set,
+        // it is the builder's auth — independent of the operator's laptop session, surviving redeploys
+        // with NO re-seed. This is the permanent fix for the recurring "builder logged out" problem.
+        'oauth_token' => env('CLAUDE_CODE_OAUTH_TOKEN'),
     ],
 
     'company' => [

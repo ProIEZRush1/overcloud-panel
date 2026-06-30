@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Enums\MessageType;
 use App\Models\Message;
+use App\Support\Ai;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Storage;
@@ -50,7 +51,7 @@ class VisionService
                 .'qué es, qué muestra, y TRANSCRIBE todo el texto, datos o cifras visibles. Si es un documento, formulario o captura, explica su propósito. '
                 .'Responde solo con la descripción, en español, sin preámbulos.';
 
-            $inner = 'HOME=/home/builder claude -p '.escapeshellarg($prompt)
+            $inner = Ai::tokenExport().'HOME=/home/builder claude -p '.escapeshellarg($prompt)
                 .' --dangerously-skip-permissions --model '.escapeshellarg((string) config('overcloud.ai.model', 'sonnet'));
             $r = Process::timeout((int) config('overcloud.ai.vision_timeout', 120))->run(['su', 'builder', '-c', $inner]);
 

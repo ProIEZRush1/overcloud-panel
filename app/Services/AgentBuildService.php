@@ -7,6 +7,7 @@ use App\Models\Conversation;
 use App\Models\Lead;
 use App\Models\Message;
 use App\Models\Project;
+use App\Support\Ai;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
@@ -88,7 +89,7 @@ class AgentBuildService
     private function claudePings(string $runAs, string $home): bool
     {
         try {
-            $r = Process::timeout(45)->run(['su', $runAs, '-c', "HOME={$home} claude -p 'responde solo: OK' 2>&1"]);
+            $r = Process::timeout(45)->run(['su', $runAs, '-c', Ai::tokenExport()."HOME={$home} claude -p 'responde solo: OK' 2>&1"]);
             $out = Str::lower($r->output());
 
             return $r->successful() && trim($out) !== ''
@@ -227,7 +228,7 @@ class AgentBuildService
         TASK;
 
         try {
-            $inner = 'cd '.escapeshellarg($repoDir).'; export DB_CONNECTION=sqlite; '
+            $inner = 'cd '.escapeshellarg($repoDir).'; export DB_CONNECTION=sqlite; '.Ai::tokenExport()
                 .'HOME=/home/builder claude -p '.escapeshellarg($task)
                 .' --dangerously-skip-permissions --output-format json';
             Process::timeout((int) ($c['verify_timeout'] ?? 2400))->run(['su', 'builder', '-c', $inner]);
@@ -345,7 +346,7 @@ class AgentBuildService
                 .'mkdir -p '.escapeshellarg($dir.'/database').' && : > '.escapeshellarg($dir.'/database/database.sqlite').' 2>/dev/null || true; ';
             // Claude Code refuses --dangerously-skip-permissions as root, so run it as the
             // non-root 'builder' user. It auto-reads the CLAUDE.md we just wrote for full context.
-            $inner = 'cd '.escapeshellarg($dir).' && '.$scrub.'HOME=/home/builder claude -p '.escapeshellarg($task)
+            $inner = 'cd '.escapeshellarg($dir).' && '.$scrub.Ai::tokenExport().'HOME=/home/builder claude -p '.escapeshellarg($task)
                 .' --dangerously-skip-permissions --output-format json';
             $r = Process::timeout((int) config('overcloud.deploy.build_timeout', 1500))
                 ->run(['su', 'builder', '-c', $inner]);
