@@ -56,10 +56,10 @@ class BillingService
         // DEMO = the full REAL system delivered as a 5-day TRIAL with the selling/revenue features locked
         // (config('trial.locked')) until the anticipo. Hand over full access + explain the lock + the clock.
         if ($isDemo && ! ($project->brief['paid'] ?? false)) {
-            $project->update(['brief' => array_merge((array) $project->brief, [
-                'trial' => true,
-                'trial_expires_at' => now()->addDays(5)->toIso8601String(),
-            ])]);
+            $b = (array) $project->brief;
+            // The 5-day clock starts at the FIRST delivery and is NEVER reset by later changes/redeploys.
+            $expiresAt = $b['trial_expires_at'] ?? now()->addDays(5)->toIso8601String();
+            $project->update(['brief' => array_merge($b, ['trial' => true, 'trial_expires_at' => $expiresAt])]);
             $name = $project->lead?->name ?: '';
             $msg = '¡Tu *sistema completo* ya está en vivo'.($name ? ', '.$name : '').'! 🎉'."\n\n🌐 {$project->prod_url}\n";
             if (! empty($admin['email'])) {

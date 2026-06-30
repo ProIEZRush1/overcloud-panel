@@ -10,6 +10,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 
@@ -65,10 +66,18 @@ class ApplyChange implements ShouldQueue
             if ($ok && $conv && $account) {
                 $deploy->reportChangeProgress($project, 4, true); // progress page → "¡Tu cambio está listo!"
                 // ALWAYS tell the client WHAT changed + HOW to access it (the agent wrote the summary).
-                $summary = trim((string) ($project->fresh()->brief['change_summary'] ?? ''));
+                $brief = (array) $project->fresh()->brief;
+                $summary = trim((string) ($brief['change_summary'] ?? ''));
                 $what = $summary !== '' ? "\n\n{$summary}" : '';
+                // For a still-unpaid demo, ALWAYS remind the remaining trial days (the clock never resets).
+                $clock = '';
+                if (($brief['trial'] ?? false) && empty($brief['paid']) && ! empty($brief['trial_expires_at'])) {
+                    $secs = Carbon::parse($brief['trial_expires_at'])->getTimestamp() - now()->getTimestamp();
+                    $days = max(0, (int) ceil($secs / 86400));
+                    $clock = "\n\n⏳ Te quedan *{$days} día".($days === 1 ? '' : 's').'* de tu demo. Cuando quieras dejarlo fijo y activar todo (cobrar/vender), dime *va* y te paso el anticipo. 🙌';
+                }
                 $gateway->sendText($account->session_name, $conv->contact_jid,
-                    "¡Listo! ✅ Ya apliqué tu cambio.{$what}\n\n🌐 Para verlo, inicia sesión en tu sistema:\n{$project->prod_url}\n\n¿Algo más en lo que te ayude? 🙌");
+                    "¡Listo! ✅ Ya apliqué tu cambio.{$what}\n\n🌐 Para verlo, inicia sesión en tu sistema:\n{$project->prod_url}{$clock}\n\n¿Algo más en lo que te ayude? 🙌");
                 $deploy->alertOwner('✅ Cambio aplicado en "'.$label.'": "'.$this->instruction.'". → '.$project->prod_url);
             } elseif (! $ok) {
                 // Keep the progress page honest (soft "still working" state, not frozen) + alert the OWNER.
