@@ -133,4 +133,20 @@ class WhatsAppGateway
     {
         $this->client()->post("/sessions/{$session}/presence", ['to' => $to, 'type' => $type]);
     }
+
+    /** React to a message (e.g. a 🕐 while the bot thinks). Empty emoji removes the reaction. Best-effort. */
+    public function sendReaction(string $session, string $to, string $messageId, string $emoji, bool $fromMe = false, ?string $participant = null): void
+    {
+        try {
+            $this->client()->post("/sessions/{$session}/react", array_filter([
+                'to' => $to,
+                'messageId' => $messageId,
+                'emoji' => $emoji,
+                'fromMe' => $fromMe,
+                'participant' => $participant,
+            ], fn ($v) => $v !== null));
+        } catch (\Throwable $e) {
+            // a reaction is cosmetic — never let it break the reply
+        }
+    }
 }

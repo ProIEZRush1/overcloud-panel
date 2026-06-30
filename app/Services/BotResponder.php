@@ -52,12 +52,32 @@ class BotResponder
             return null;
         }
 
-        if ($conversation->is_group) {
-            return $this->send($conversation, $this->composeGroup($conversation)
-                ?? '¡Recibido! 🙌 Lo reviso y te respondo aquí mismo en un momento.');
-        }
+        // Show a 🕐 on the client's message while the bot composes its reply (cleared the moment it answers),
+        // so the client can see it's "thinking" instead of staring at silence during a slow generation.
+        $this->reactThinking($conversation, $inbound, true);
+        try {
+            if ($conversation->is_group) {
+                return $this->send($conversation, $this->composeGroup($conversation)
+                    ?? '¡Recibido! 🙌 Lo reviso y te respondo aquí mismo en un momento.');
+            }
 
-        return $this->funnel($conversation, $inbound);
+            return $this->funnel($conversation, $inbound);
+        } finally {
+            $this->reactThinking($conversation, $inbound, false);
+        }
+    }
+
+    /** Put/remove a 🕐 reaction on the client's message while the bot is generating its reply (1:1 only). */
+    private function reactThinking(Conversation $conversation, Message $inbound, bool $on): void
+    {
+        try {
+            $account = $conversation->whatsappAccount;
+            if ($conversation->is_group || ! $account || empty($inbound->wa_message_id)) {
+                return;
+            }
+            $this->gateway->sendReaction($account->session_name, $conversation->contact_jid, $inbound->wa_message_id, $on ? '🕐' : '', (bool) $inbound->is_from_me);
+        } catch (\Throwable $e) {
+        }
     }
 
     /** Send a one-off notice to the client (respecting the bot-enabled gate) without running the funnel. */
