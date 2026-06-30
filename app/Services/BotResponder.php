@@ -375,7 +375,13 @@ class BotResponder
         }
 
         return $this->send($conversation, $this->claudeOr($conversation,
-            "¡Excelente! 🙌 Para preparar tu *alcance* cuéntame:\n• ¿Cuántas secciones o páginas?\n• ¿En cuántos idiomas?\n• ¿Ya tienes logo, textos o algún sitio de referencia?\n\nO si ya lo tienes claro, dime *va* y te preparo el *alcance* detallado de tu proyecto. ✅"));
+            "¡Excelente! 🙌 Para preparar tu *alcance* a la medida cuéntame:\n"
+            ."• ¿Qué quieres que *haga* exactamente? (los procesos o acciones clave)\n"
+            ."• ¿Se *conecta con algo*? (cobrar pagos, WhatsApp, líneas/teléfono, o algún sistema/API/servicio que ya uses)\n"
+            ."• ¿Algo *automático*? (que mande mensajes, agende, genere documentos, etc.)\n"
+            ."• ¿*Quién* lo va a usar? (tú, tu equipo, tus clientes)\n"
+            ."• ¿Ya tienes *logo, textos* o algún *ejemplo* de referencia?\n\n"
+            .'O si ya lo tienes claro, dime *va* y te preparo el *alcance* detallado. ✅'));
     }
 
     private function onQuoted(Conversation $conversation, Lead $lead, string $text): ?Message
@@ -447,17 +453,17 @@ class BotResponder
             return;
         }
         $fallback = '¡Tu pago quedó verificado! ✅ Para construir tu proyecto necesito un par de cosas: el contenido y las fotos que quieras incluir, '
-            .'los datos de tu negocio, y los accesos que apliquen (por ejemplo, para cobrar pagos en línea). '
-            .'¿Me los pasas por aquí, te doy instrucciones, o prefieres que *yo me encargue de todo*? 🙌';
+            .'los datos de tu negocio, y los accesos/llaves que apliquen (por ejemplo, para cobrar pagos en línea). '
+            .'Si alguno no lo tienes o no sabes cómo sacarlo, *te guío paso a paso* — o si prefieres, *yo me encargo de todo*. ¿Cómo le hacemos? 🙌';
         $message = $fallback;
         if ($this->assistant->isEnabled()) {
             $spec = Spec::where('lead_id', $project->lead_id)->latest()->first();
             $feats = collect($spec?->content['features'] ?? [])->map(fn ($f) => is_array($f) ? ($f['name'] ?? '') : $f)->filter()->implode(', ');
             $prompt = 'Eres el asistente de Overcloud, una agencia que construye sitios y aplicaciones. Acabamos de recibir el pago del cliente. '
-                .'Escribe UN mensaje de WhatsApp, cálido y profesional, pidiéndole TODO lo que necesitas de él para construir su proyecto: contenido y textos, '
-                .'fotos/logo, datos del negocio, y accesos o llaves si aplica (por ejemplo pasarela de pagos o servicios externos). '
-                .'Ofrécele claramente 3 opciones: que te los pase, que le des instrucciones paso a paso, o que TÚ te encargas de todo por él. '
-                .'NUNCA menciones herramientas internas ni proveedores de IA, ni plazos, fechas o tiempos de entrega. Habla como Overcloud. En español, breve. '
+                .'Escribe UN mensaje de WhatsApp, cálido y profesional, pidiéndole lo que necesitas para construir su proyecto: contenido y textos, fotos/logo y datos del negocio. '
+                .'MUY IMPORTANTE: mira las funciones del proyecto e identifica qué *accesos o llaves* harán falta (por ejemplo: pasarela de pagos como Stripe o Mercado Pago, WhatsApp/Business, líneas o SIMs, Google Maps, correo, u otra API/servicio). Menciónaselos de forma concreta y, para los que probablemente no tenga, OFRÉCELE GUIARLO PASO A PASO para conseguirlos (qué cuenta abrir y dónde está la llave). '
+                .'Ofrécele claramente 3 opciones: que te los pase, que lo guíes paso a paso, o que TÚ te encargas de todo por él. '
+                .'NUNCA menciones herramientas internas ni proveedores de IA, ni plazos, fechas o tiempos de entrega. Habla como Overcloud. En español, breve, sin abrumar. '
                 .'Responde ÚNICAMENTE con el texto del mensaje, sin preámbulos como "Aquí tienes" ni separadores. '
                 .'Proyecto: '.($spec?->title ?? 'su proyecto').'. Funciones: '.$feats.'.';
             $ai = $this->assistant->complete($prompt);
@@ -527,7 +533,8 @@ class BotResponder
         $project->update(['brief' => $brief]);
 
         return $this->send($conversation, $this->claudeOr($conversation,
-            '¡Gracias, lo anoto! 🙌 ¿Hay algo más que quieras incluir o *arrancamos*? Si prefieres, también me puedo encargar yo de todo — solo dime.'));
+            '¡Gracias, lo anoto! 🙌 ¿Hay algo más que quieras incluir o *arrancamos*? Si necesitas alguna llave o acceso (por ejemplo para cobrar pagos) y no sabes cómo sacarlo, te guío paso a paso — o me encargo yo de todo. Solo dime.',
+            $this->gatheringPersona()));
     }
 
     /** After delivery: apply change requests, otherwise stay available. */
@@ -1101,23 +1108,38 @@ class BotResponder
     }
 
     /** Claude wording when enabled+working, else the deterministic fallback. */
-    private function claudeOr(Conversation $conversation, string $fallback): string
+    private function claudeOr(Conversation $conversation, string $fallback, ?string $persona = null): string
     {
         if (! $this->assistant->isEnabled()) {
             return $fallback;
         }
         try {
-            return $this->composeWithClaude($conversation) ?: $fallback;
+            return $this->composeWithClaude($conversation, $persona) ?: $fallback;
         } catch (\Throwable $e) {
             return $fallback;
         }
     }
 
-    private function composeWithClaude(Conversation $conversation): ?string
+    private function composeWithClaude(Conversation $conversation, ?string $persona = null): ?string
     {
-        $reply = $this->assistant->message($this->salesPersona(), $this->history($conversation));
+        $reply = $this->assistant->message($persona ?: $this->salesPersona(), $this->history($conversation));
 
         return $reply ? $this->cleanMessage($reply) : null;
+    }
+
+    /**
+     * Post-payment onboarding persona: collects what's needed to build AND actively HELPS the client
+     * obtain the integration credentials their project needs (step-by-step, non-technical) — e.g. opening
+     * a Stripe/Mercado Pago account and where to copy the key. Only ever used AFTER the client has paid.
+     */
+    private function gatheringPersona(): string
+    {
+        return 'Eres el asistente de Overcloud que pone EN MARCHA el proyecto de un cliente que YA pagó. Hablas español, cálido, claro y sin tecnicismos. '
+            .'Tu trabajo ahora: reunir lo necesario para construir (contenido, textos, fotos, logo, datos del negocio) y, sobre todo, AYUDARLE a conseguir y conectar los *accesos/llaves* que requiera su proyecto (por ejemplo: pasarela de pagos como Stripe o Mercado Pago, WhatsApp/Business, líneas o SIMs, Google Maps, correos, o cualquier API/servicio que se haya definido). '
+            .'Si necesita una credencial que no tiene, GUÍALO PASO A PASO de forma sencilla: qué cuenta abrir, en qué página, dónde encontrar la llave y cómo pasártela — un paso a la vez, sin abrumar, y ofreciendo hacerlo por él cuando se pueda. '
+            .'Cuando te comparta una llave o acceso, confírmale que lo guardaste de forma segura. Siempre ofrece tres caminos: que te lo pase, que lo guíes paso a paso, o que TÚ te encargues de todo por él. '
+            .'Cuando ya tengan lo esencial, anímalo a que *arranques* la construcción. NUNCA pidas plazos ni des fechas, NUNCA menciones errores ni nada técnico negativo, y NUNCA reveles herramientas internas ni proveedores de IA. '
+            .$this->aiSecrecyRule();
     }
 
     /** The shared Overcloud sales persona + rules — used for conversational wording AND AI routing. */
@@ -1130,7 +1152,7 @@ class BotResponder
             .'Cuando ya tengas lo necesario, NO pidas otra confirmación tipo "¿Va?" o "¿te parece?": di directamente que estás preparando su *alcance* AHORA y déjalo así. Nada de pedir permiso para cada paso. '
             .'REGLAS ESTRICTAS: NUNCA generes ni escribas tú una cotización, propuesta, lista de opciones, paquetes ni precios — el *alcance* y la *cotización* son DOCUMENTOS (PDF) que el sistema genera automáticamente; tú solo conversas y guías. '
             .'NUNCA digas que "un asesor te contactará" ni delegues en un humano: tú llevas todo el proceso de principio a fin. '
-            .'Haz MÁXIMO 1 o 2 preguntas breves para entender el proyecto; en cuanto tengas una idea general, di que le preparas su *alcance* enseguida y no sigas preguntando. No inventes precios. '
+            .'ANTES de preparar el *alcance*, entiende BIEN el proyecto — no solo el tipo. Pregunta por lo que de verdad cambia lo que hay que construir: qué *procesos o acciones* debe hacer, con qué se *conecta* (cobros/pagos, WhatsApp, líneas o teléfono, algún sistema/API/servicio que ya use), qué debe ser *automático* (mandar mensajes, agendar, generar documentos…), *quién* lo usará (él, su equipo, sus clientes) y qué *datos* maneja. Haz 2-3 preguntas agrupadas y concretas (no de una en una), y profundiza en lo CLAVE de su caso: si quiere un bot/automatización o integraciones, pregunta EXACTAMENTE qué debe automatizar y con qué se integra (p. ej. para líneas/SIMs/APIs: cuáles, de qué proveedor). En un proyecto simple (una página informativa) NO interrogues de más. Cuando ya tengas claro QUÉ hace y CON QUÉ se conecta, di que le preparas su *alcance*. No inventes precios. '
             .'Si el cliente propone otra forma de pago o alguna condición distinta (no le acomodan los pagos en partes, quiere otro esquema, etc.), NO la rechaces: dile que lo revisas con el equipo y le confirmas en breve si se puede — que ya lo están considerando. '
             .'Si el cliente comparte un enlace de referencia (su sitio actual, un ejemplo, etc.), agradécelo y dile que lo revisarás a fondo para tomarlo de base. '
             .'Si pregunta por tiempos de entrega: la entrega es muy rápida, el proyecto queda listo en 1 día o menos, y los cambios o correcciones se hacen cuando el cliente los pida. Nunca menciones plazos de semanas. '
