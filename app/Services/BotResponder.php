@@ -180,7 +180,7 @@ class BotResponder
             .$actionList
             ."\n\nResponde ÚNICAMENTE con JSON válido (sin ```): {\"action\":\"<una de las claves de arriba>\",\"reply\":\"<el mensaje de WhatsApp para el cliente, cálido y breve>\""
             .($wantsService ? ',"service":"<landing|website|ecommerce|webapp|mobileapp>"' : '')
-            .'}. El "reply" es lo que se le ENVÍA al cliente. Si la acción AVANZA (prepara alcance, demo, cotización o datos de pago), el sistema enviará además el documento correspondiente, así que NO inventes precios ni listas: usa el reply solo para confirmar con naturalidad.'
+            .'}. El "reply" es lo que se le ENVÍA al cliente. Si la acción AVANZA (prepara alcance, demo, cotización o datos de pago), el sistema enviará además el documento correspondiente, así que NO inventes precios ni listas. IMPORTANTE: si el cliente hizo una PREGUNTA o te pidió una RECOMENDACIÓN (p. ej. "recomiéndame el mejor proveedor"), tu "reply" DEBE RESPONDERLA concretamente (da tu recomendación real) ANTES de avanzar — nunca la ignores; si no preguntó nada, usa el reply solo para confirmar, breve y cálido.'
             ."\n\nConversación:\n".$transcript;
 
         try {
@@ -214,6 +214,10 @@ class BotResponder
             case LeadStage::Qualifying:
                 if ($action === 'advance') {
                     $this->ensureService($lead, $d['service'] ?? null);
+                    // Answer whatever the client just asked (e.g. a requested recommendation) BEFORE the alcance.
+                    if ($reply !== '') {
+                        $this->send($conversation, $reply);
+                    }
 
                     return $this->sendScope($conversation, $lead->fresh());
                 }
@@ -222,6 +226,10 @@ class BotResponder
 
             case LeadStage::Spec:
                 if ($action === 'advance') {
+                    if ($reply !== '') {
+                        $this->send($conversation, $reply);
+                    }
+
                     return $this->startDemo($conversation, $lead);
                 }
                 if ($action === 'adjust') {

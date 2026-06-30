@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-@if(!($done ?? false))<meta http-equiv="refresh" content="6">@endif
+@if(!($done ?? false))<meta http-equiv="refresh" content="10">@endif
 <title>Tu proyecto en Overcloud</title>
 <style>
     :root { --p: {{ $brand['primary'] ?? '#7c3aed' }}; --a: {{ $brand['accent'] ?? '#c026d3' }}; }
@@ -14,7 +14,11 @@
     h1 { font-size: 19px; margin: 14px 0 4px; }
     .sub { color: #a99fce; font-size: 13px; margin-bottom: 22px; }
     .bar { height: 10px; background: #2a2150; border-radius: 999px; overflow: hidden; margin-bottom: 24px; }
-    .fill { height: 100%; width: {{ $pct }}%; background: linear-gradient(90deg,var(--p),var(--a)); border-radius: 999px; transition: width .6s ease; }
+    .fill { position: relative; height: 100%; width: {{ $pct }}%; background: linear-gradient(90deg,var(--p),var(--a)); border-radius: 999px; transition: width .8s ease; overflow: hidden; }
+    .fill::after { content:''; position:absolute; inset:0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.45), transparent); transform: translateX(-100%); animation: shimmer 1.6s infinite; }
+    @keyframes shimmer { to { transform: translateX(100%); } }
+    .act { color: #c9bff0; font-size: 13px; margin: -10px 0 18px; min-height: 18px; transition: opacity .4s; }
+    .act b { color: var(--a); }
     .step { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px solid #221a44; font-size: 15px; }
     .step:last-child { border-bottom: 0; }
     .dot { width: 24px; height: 24px; border-radius: 50%; flex: 0 0 24px; display: flex; align-items: center; justify-content: center; font-size: 13px; }
@@ -38,7 +42,9 @@
         <h1>{{ $title }}</h1>
         <div class="sub">@if($done) ¡Tu sistema está listo! 🎉 @elseif($failed ?? false)<span class="pulse"></span>Estamos afinando un detalle — retomamos en un momento @else<span class="pulse"></span>Construyendo tu sistema en tiempo real @endif</div>
 
-        <div class="bar"><div class="fill"></div></div>
+        @if(!($done ?? false) && !($failed ?? false))<div class="act" id="act"><span class="pulse"></span><span id="actText">Trabajando en tu sistema…</span></div>@endif
+
+        <div class="bar"><div class="fill" id="fill"></div></div>
 
         @foreach($steps as $i => $label)
             @php $cls = $i < $current ? 'done' : ($i === $current && !$done ? 'current' : ($done ? 'done' : 'pending')); @endphp
@@ -57,5 +63,32 @@
 
         <div class="foot">Esta página se actualiza sola · {{ $business }} · Overcloud</div>
     </div>
+@if(!($done ?? false) && !($failed ?? false))
+<script>
+(function(){
+    // Always-alive UX between the page's real refreshes: the bar creeps toward the next step and a live
+    // activity line rotates — so the client always sees movement, never a frozen "generic" screen.
+    var steps = {{ count($steps) }}, stepSize = 100/steps;
+    var pct = {{ $pct }}, cap = Math.min(96, pct + stepSize*0.9);
+    var fill = document.getElementById('fill');
+    setInterval(function(){ if(pct < cap){ pct += Math.max(0.06,(cap-pct)*0.05); fill.style.width = pct.toFixed(1)+'%'; } }, 650);
+    var acts = [
+        'Diseñando la interfaz con tu marca…',
+        'Creando los módulos de tu sistema…',
+        'Conectando tu base de datos segura…',
+        'Programando tu panel de administración…',
+        'Configurando accesos y permisos…',
+        'Integrando las funciones que pediste…',
+        'Sembrando datos de ejemplo…',
+        'Optimizando el rendimiento…',
+        'Revisando cada pantalla…',
+        'Afinando los últimos detalles…'
+    ];
+    var el = document.getElementById('actText'), i = Math.floor({{ $pct }}/ (100/acts.length)) % acts.length;
+    el.textContent = acts[i];
+    setInterval(function(){ i=(i+1)%acts.length; var p=el.parentElement; p.style.opacity=0; setTimeout(function(){ el.textContent=acts[i]; p.style.opacity=1; },350); }, 3200);
+})();
+</script>
+@endif
 </body>
 </html>
