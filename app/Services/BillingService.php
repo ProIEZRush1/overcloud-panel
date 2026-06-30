@@ -70,6 +70,7 @@ class BillingService
                 $msg .= '📲 Conectar WhatsApp: '.$connect."\n";
             }
             $msg .= "\nExplóralo TODO 🙌 — está hecho a la medida de tu negocio. Las funciones para *cobrar y vender* están bloqueadas 🔒; se activan al confirmar tu proyecto con el *anticipo* (y así queda fijo para siempre).\n\n"
+                ."🔌 El demo muestra tu sistema completo, pero las *conexiones externas* (como telefonía/voz, pagos en línea, WhatsApp, calendarios u otras APIs) se *configuran y dejan 100% listas al confirmar con tu anticipo* — en el demo no van conectadas todavía.\n\n"
                 .'⏳ Tu demo está disponible *5 días*. Aquí abajo te dejo tu *cotización* para que, cuando quieras, lo dejes fijo. 💰';
             $this->gateway->sendText($account->session_name, $conv->contact_jid, $msg);
 

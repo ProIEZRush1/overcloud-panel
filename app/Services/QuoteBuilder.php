@@ -33,12 +33,12 @@ class QuoteBuilder
 
         $features = ServiceFeature::whereIn('id', $opts['feature_ids'] ?? [])->get();
 
-        // The AI prices the project from its REAL scope (complexity, integrations, multi-tenant/SaaS,
-        // voice/telephony, panels…) for EVERY client — the flat per-service base drastically under-priced
-        // big builds. Falls back to the catalog math only if the AI is unavailable.
-        $ai = $this->aiPrice($lead, $spec ?? $lead->latestSpec, $pages, $languages);
+        // The AI breaks the scope into FUNCTIONS and prices each one CHEAPLY, in the same low range as our
+        // catalog (so a robust build is itemized affordably, never a scary lump sum). The base price stays
+        // the catalog's per-service base. Falls back to the catalog features only if the AI is unavailable.
+        $ai = $this->aiPrice($lead, $spec ?? $lead->latestSpec, $service, $pages, $languages);
 
-        // Maintenance scales with complexity: the AI's monthly, or the platform base + per-function monthly.
+        // Maintenance: the AI's (low) monthly, or the platform base + per-function monthly.
         $maintenance = $ai['monthly_cents'] ?? ((int) $service->base_maintenance_cents + (int) $features->sum('maintenance_cents'));
 
         $quote = Quote::create([
@@ -55,18 +55,27 @@ class QuoteBuilder
                 .'El mantenimiento mensual es un servicio aparte y recurrente (ver el recuadro de mantenimiento), no forma parte del precio del proyecto. Precios en MXN.',
         ]);
 
-        // Main service line — the AI's project price (already covers every function), or the catalog price.
+        // Main service line — ALWAYS the catalog base price for the project type (keeps things affordable).
         $quote->items()->create([
             'type' => QuoteItemType::Service,
             'service_id' => $service->id,
-            'description' => $service->name.($ai ? ' a la medida' : '').' — '.$pages.' página(s), '.$languages.' idioma(s)',
+            'description' => $service->name.' — '.$pages.' página(s), '.$languages.' idioma(s)',
             'quantity' => 1,
-            'unit_price_cents' => $ai['project_cents'] ?? $service->priceForCents($pages, $languages),
+            'unit_price_cents' => $service->priceForCents($pages, $languages),
         ]);
 
-        // Per-function priced lines ONLY in catalog mode — the AI price already includes all the functions
-        // (they're detailed in the alcance), so adding them again would double-charge.
-        if (! $ai) {
+        // Function lines: the AI's itemized functions priced CHEAPLY (catalog tier), or the catalog add-ons.
+        if ($ai && ! empty($ai['features'])) {
+            foreach ($ai['features'] as $f) {
+                $quote->items()->create([
+                    'type' => QuoteItemType::Feature,
+                    'service_id' => $service->id,
+                    'description' => (string) $f['name'],
+                    'quantity' => 1,
+                    'unit_price_cents' => (int) $f['price_cents'],
+                ]);
+            }
+        } else {
             foreach ($features as $feature) {
                 $quote->items()->create([
                     'type' => QuoteItemType::Feature,
@@ -95,10 +104,12 @@ class QuoteBuilder
     }
 
     /**
-     * Ask the AI to price the project from its REAL scope, for the Mexican market (MXN).
-     * Returns ['project_cents' => int, 'monthly_cents' => int] or null (→ fall back to catalog pricing).
+     * Ask the AI to itemize the project into FUNCTIONS and price each one CHEAPLY, in the same low range
+     * as our catalog (Overcloud is the affordable option) — so even a robust build reads as an accessible
+     * list of add-ons on top of the base, never an expensive lump sum.
+     * Returns ['features' => [['name'=>string,'price_cents'=>int], …], 'monthly_cents' => int] or null.
      */
-    private function aiPrice(Lead $lead, ?Spec $spec, int $pages, int $languages): ?array
+    private function aiPrice(Lead $lead, ?Spec $spec, Service $service, int $pages, int $languages): ?array
     {
         $assistant = app(Assistant::class);
         if (! $assistant->isEnabled()) {
@@ -106,27 +117,35 @@ class QuoteBuilder
         }
         $feats = collect($spec?->content['features'] ?? [])
             ->map(fn ($f) => is_array($f) ? ($f['name'] ?? '') : $f)->filter()->implode('; ');
-        $prompt = 'Eres un cotizador SENIOR de software para el mercado MEXICANO. Estima el precio JUSTO, competitivo pero RENTABLE de ESTE proyecto según su complejidad y funciones REALES (en pesos MXN). '
-            .'Considera: cantidad y dificultad de funciones, integraciones (telefonía/Twilio, voz con IA/ElevenLabs, pagos/Stripe/Mercado Pago, Google Calendar, WhatsApp, APIs externas), si es multi-tenant o SaaS por suscripción, paneles de administración, reportes, grabación/transcripción, etc. '
-            .'Rangos de referencia (MXN): sitio informativo simple 5,000–15,000; tienda o app con CRUD y panel 18,000–45,000; sistema robusto / SaaS / multi-tenant / voz-IA / telefonía 60,000–400,000+ según el alcance. '
-            .'"project" = pago ÚNICO de desarrollo. "monthly" = mensualidad (hosting + soporte; si es SaaS por suscripción o usa servicios recurrentes de terceros como telefonía o voz, cóbrala acorde; un sitio simple lleva mensualidad baja). '
-            .'Responde SOLO con JSON, sin texto ni explicación: {"project": <entero MXN>, "monthly": <entero MXN>}.'
+        $base = number_format($service->base_price_cents / 100);
+        $prompt = 'Eres el cotizador de Overcloud, una agencia MEXICANA ECONÓMICA (precios BAJOS para ganar clientes, en MXN). '
+            ."El tipo de proyecto ({$service->name}) ya incluye un precio base de \${$base} MXN que se cobra aparte — NO lo incluyas. "
+            .'Tu tarea: desglosar el alcance en FUNCIONES concretas y ponerle a CADA UNA un precio BARATO, en NUESTRO rango de catálogo: '
+            .'funciones simples $600–$1,000 MXN; medias $1,000–$1,800; complejas o a la medida $1,800–$3,000 MÁXIMO por función. '
+            .'NUNCA cobres miles de dólares ni decenas de miles por una función — somos baratos. Lista entre 5 y 15 funciones reales del alcance (login, roles, panel, reportes, módulos, integraciones, etc.). '
+            .'"monthly" = mensualidad de hosting+soporte, BAJA: $300–$1,500 MXN según el tamaño. '
+            .'Responde SOLO con JSON, sin texto: {"features":[{"name":"<función>","price":<MXN entero>}, …],"monthly":<MXN entero>}.'
             ."\n\nProyecto: ".($spec?->title ?: ($lead->service?->name ?? 'proyecto'))
             ."\nNegocio: ".(string) ($lead->summary ?? $lead->company ?? '')
-            ."\nPáginas/módulos: {$pages} · Idiomas: {$languages}"
-            ."\nFunciones del alcance: ".($feats ?: '(no detalladas)');
+            ."\nFunciones del alcance: ".($feats ?: '(dedúcelas del proyecto)');
         try {
             $raw = $assistant->complete($prompt);
             if (! preg_match('/\{.*\}/s', (string) $raw, $m) || ! is_array($d = json_decode($m[0], true))) {
                 return null;
             }
-            $project = (int) round((float) ($d['project'] ?? 0));
-            $monthly = (int) round((float) ($d['monthly'] ?? 0));
-            if ($project <= 0) {
+            $features = collect($d['features'] ?? [])
+                ->map(fn ($f) => [
+                    'name' => trim((string) ($f['name'] ?? '')),
+                    // Hard cap each function at $3,000 MXN so the AI can never make it expensive.
+                    'price_cents' => min(300000, max(0, (int) round((float) ($f['price'] ?? 0)) * 100)),
+                ])
+                ->filter(fn ($f) => $f['name'] !== '' && $f['price_cents'] > 0)
+                ->values()->all();
+            if (empty($features)) {
                 return null;
             }
 
-            return ['project_cents' => $project * 100, 'monthly_cents' => max(0, $monthly) * 100];
+            return ['features' => $features, 'monthly_cents' => max(0, (int) round((float) ($d['monthly'] ?? 0)) * 100)];
         } catch (\Throwable $e) {
             Log::warning('aiPrice failed', ['lead' => $lead->id, 'e' => $e->getMessage()]);
 
