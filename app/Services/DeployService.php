@@ -500,21 +500,29 @@ class DeployService
      */
     private function waitForLive(array $c, ?string $depUuid, string $url, array $content, array $stack): array
     {
+        // STEP 1 — wait for THIS Coolify deployment to actually FINISH before touching the URL. Critical:
+        // on a CHANGE/redeploy the OLD container keeps serving 200 the whole time the new one builds, so
+        // checking the URL first would falsely report success (the change looked "done" but never shipped).
+        if ($depUuid) {
+            for ($i = 0; $i < 110; $i++) { // ~15 min for a build
+                $status = Http::withToken($c['coolify_token'])->timeout(15)
+                    ->get($c['coolify_url']."/deployments/{$depUuid}")->json('status');
+                if (in_array($status, ['finished', 'success'], true)) {
+                    break;
+                }
+                if (in_array($status, ['failed', 'error', 'cancelled'], true)) {
+                    return ['ok' => false, 'reason' => 'build falló (deployment '.$status.')'];
+                }
+                sleep(8);
+            }
+        }
+
+        // STEP 2 — the NEW code is deployed; now confirm it actually serves correctly (cert + boot can lag).
         $last = ['ok' => false, 'reason' => 'sin respuesta'];
-        // ~8 min: a proxied Cloudflare subdomain's first Let's Encrypt cert can take several
-        // minutes to serve 200, so be patient before giving up (the client never sees this).
-        for ($i = 0; $i < 60; $i++) {
+        for ($i = 0; $i < 45; $i++) {
             $last = $this->verify($url, $content, $stack);
             if ($last['ok']) {
                 return $last;
-            }
-            // Only fail-fast on a real build failure, and only after giving the cert time to settle.
-            if ($depUuid && $i >= 8) {
-                $status = Http::withToken($c['coolify_token'])->timeout(15)
-                    ->get($c['coolify_url']."/deployments/{$depUuid}")->json('status');
-                if (in_array($status, ['failed', 'error', 'cancelled'], true)) {
-                    return ['ok' => false, 'reason' => 'build falló ('.$last['reason'].')'];
-                }
             }
             sleep(8);
         }
