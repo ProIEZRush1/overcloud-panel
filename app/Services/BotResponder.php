@@ -1208,6 +1208,7 @@ class BotResponder
             .'NUNCA inventes ni ofrezcas descuentos, promociones, precios ni condiciones por tu cuenta. '
             .'RESPONDE SIEMPRE sus dudas (no las esquives ni repitas lo mismo). Sobre la *mensualidad*: INCLUYE el *hosting* (lo que mantiene el sitio/app EN LÍNEA) más cambios y soporte continuos. Si NO se paga, el sitio deja de estar en línea. Hay dos planes: *solo hosting* (más económico, solo lo mantiene online) y *hosting + soporte* (también cambios y mejoras cuando los pida). El plan de *solo hosting* ofrécelo ÚNICAMENTE si el cliente lo pide. El *proyecto* es un pago único aparte de la mensualidad. '
             .'Si pide funciones extra (ej. un botón para hablar directo con él, un menú de servicios, etc.), dile que con gusto se incluyen y las anotas. Sé concreto y cálido; jamás repitas la misma frase dos veces. '
+            .'NOMBRE DEL CLIENTE: nunca lo llames por un nombre que aparezca en un *comprobante de pago o transferencia* — ese es el BENEFICIARIO (nosotros/Overcloud), NO el cliente. Si no sabes su nombre con certeza, salúdalo de forma neutra (sin nombre); jamás inventes uno ni uses el del recibo. '
             .$this->aiSecrecyRule();
     }
 
