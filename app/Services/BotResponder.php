@@ -580,7 +580,13 @@ class BotResponder
     private function onProduction(Conversation $conversation, Lead $lead, Message $inbound, string $text): ?Message
     {
         $project = Project::where('lead_id', $lead->id)->latest('id')->first();
-        if ($project && $project->repo_url && $project->coolify_app_uuid && $this->looksLikeChange($text)) {
+        // Only a TEXT or (confirmed) VOICE message can be a change order. A client sending an
+        // IMAGE / document / other media is SHOWING or ASKING (a screenshot, a reference) — NOT
+        // dictating a code change. Its AI vision description often contains verbs like
+        // "ajusta / actualiza / cambio" that would FALSELY trigger a live-site edit (this fired a
+        // pointless rebuild on a paid client from a Stripe screenshot). Never auto-edit from media.
+        $isTextOrVoice = in_array($inbound->type, [MessageType::Text, MessageType::Audio], true);
+        if ($project && $project->repo_url && $project->coolify_app_uuid && $isTextOrVoice && $this->looksLikeChange($text)) {
             // Send Claude the ORIGINAL-case message, never the lowercased match copy
             // (lowercasing corrupts URLs, brand casing and filenames in the instruction).
             $instruction = trim((string) $inbound->body);
