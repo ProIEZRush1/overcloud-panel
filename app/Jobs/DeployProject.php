@@ -31,6 +31,9 @@ class DeployProject implements ShouldBeUnique, ShouldQueue
     // SIGKILLed mid-flight, and so it survives sitting in the queue behind another build.
     public int $timeout = 5400;
 
+    /** Wait between retries so a fast-failing build can't hammer (tight-loop) for the whole retryUntil window. */
+    public int $backoff = 180;
+
     /** No two concurrent builds for the same project (a double-dispatch is a no-op duplicate). */
     public int $uniqueFor = 7200;
 

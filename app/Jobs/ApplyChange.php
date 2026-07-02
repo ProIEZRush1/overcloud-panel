@@ -27,6 +27,9 @@ class ApplyChange implements ShouldQueue
 
     public int $timeout = 5400;
 
+    /** Wait between retries so a fast-failing change can't hammer (tight-loop) for the whole retryUntil window. */
+    public int $backoff = 180;
+
     /** Survive a worker restart + a long wait in the queue: retry instead of stranding the client. */
     public function retryUntil(): \DateTimeInterface
     {
