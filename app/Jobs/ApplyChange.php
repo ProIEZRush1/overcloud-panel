@@ -70,8 +70,9 @@ class ApplyChange implements ShouldQueue
                 $summary = trim((string) ($brief['change_summary'] ?? ''));
                 $what = $summary !== '' ? "\n\n{$summary}" : '';
                 // For a still-unpaid demo, ALWAYS remind the remaining trial days (the clock never resets).
+                // A comped/free build (partner, courtesy) is NOT a demo — never show the trial clock or anticipo ask.
                 $clock = '';
-                if (($brief['trial'] ?? false) && empty($brief['paid']) && ! empty($brief['trial_expires_at'])) {
+                if (($brief['trial'] ?? false) && empty($brief['paid']) && empty($brief['comped']) && ! empty($brief['trial_expires_at'])) {
                     $secs = Carbon::parse($brief['trial_expires_at'])->getTimestamp() - now()->getTimestamp();
                     $days = max(0, (int) ceil($secs / 86400));
                     $clock = "\n\n⏳ Te quedan *{$days} día".($days === 1 ? '' : 's').'* de tu demo. Cuando quieras dejarlo fijo y activar todo (cobrar/vender), dime *va* y te paso el anticipo. 🙌';

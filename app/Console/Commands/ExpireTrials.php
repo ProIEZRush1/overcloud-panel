@@ -31,6 +31,7 @@ class ExpireTrials extends Command
             ->get()
             ->filter(fn (Project $p) => ($p->brief['trial'] ?? false)
                 && empty($p->brief['paid'])
+                && empty($p->brief['comped']) // comped/free partner builds are NOT trials — never tear them down
                 && empty($p->brief['trial_expired_at']));
 
         foreach ($trials as $project) {
