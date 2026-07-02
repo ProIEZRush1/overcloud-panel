@@ -548,6 +548,17 @@ class BotResponder
         // saying they'll send material ("te paso las fotos", "ahorita te mando"), which used to
         // kick off a premature deploy with an incomplete brief (and lose the keys they were about to send).
         if (($all || $this->readyToBuild($text) || $this->isYes($text)) && ! $this->promisingToSend($text)) {
+            // NEVER re-provision a project that is already live (has a Coolify app). A fresh
+            // DeployProject rebuilds from scratch and can wipe a delivered client's app, its
+            // APP_KEY and data. Once it's online, further "go/yes" signals are handled as
+            // change requests (onProduction), never as a rebuild.
+            if ($project->coolify_app_uuid) {
+                $lead->update(['stage' => LeadStage::InProduction]);
+
+                return $this->send($conversation, $this->claudeOr($conversation,
+                    '¡Tu sistema ya está *en línea* y funcionando! 🙌 Si quieres que le *cambie o agregue* algo, dime exactamente qué y lo aplico enseguida. ✍️',
+                    $this->gatheringPersona()));
+            }
             $brief['handle_all'] = $all;
             $project->update(['brief' => $brief]);
             $lead->update(['stage' => LeadStage::InProduction]);

@@ -26,20 +26,23 @@ class DeployProject implements ShouldBeUnique, ShouldQueue
     use Queueable;
     use SerializesModels;
 
-    public int $timeout = 1800;
+    // A full first build (Laravel + Vue store with modules, assets, DB provision + deploy) can
+    // legitimately run well over 45 min. Give it real headroom so a large build never gets
+    // SIGKILLed mid-flight, and so it survives sitting in the queue behind another build.
+    public int $timeout = 5400;
 
     /** No two concurrent builds for the same project (a double-dispatch is a no-op duplicate). */
-    public int $uniqueFor = 3600;
+    public int $uniqueFor = 7200;
 
     public function uniqueId(): string
     {
         return (string) $this->projectId;
     }
 
-    /** Survive a worker restart (deploys): retry a killed build instead of stranding the client. */
+    /** Survive a worker restart + a long wait in the queue: retry a killed build instead of stranding the client. */
     public function retryUntil(): \DateTimeInterface
     {
-        return now()->addMinutes(45);
+        return now()->addMinutes(120);
     }
 
     public function __construct(public int $projectId) {}
@@ -53,7 +56,7 @@ class DeployProject implements ShouldBeUnique, ShouldQueue
 
         // Mutually exclusive with ApplyChange (shared lock key) so an initial build and a change
         // can never push the same repo / trigger the same Coolify app at the same time.
-        $lock = Cache::lock('deploy-project:'.$this->projectId, 1800);
+        $lock = Cache::lock('deploy-project:'.$this->projectId, 5400);
         if (! $lock->get()) {
             $this->release(30);
 

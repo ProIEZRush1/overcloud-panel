@@ -48,11 +48,16 @@ seed_creds /root/.claude ""
 seed_creds /home/builder/.claude builder
 mkdir -p storage/builds && chmod 777 storage/builds
 
-# Workers: a fast lane for bot replies, a separate slow lane for site deploys. SUPERVISED — each
-# runs in an auto-respawn loop, so if a worker dies (OOM, a hung build, an uncaught error) it comes
-# back instead of silently halting the whole queue (which would freeze every client build/bot reply).
+# Workers: a fast lane for bot replies, plus TWO parallel slow lanes for site deploys so a long
+# build (a full store can take an hour) never starves another lead's demo behind it. SUPERVISED —
+# each runs in an auto-respawn loop, so if a worker dies (OOM, a hung build, an uncaught error) it
+# comes back instead of silently halting the whole queue. Per-project Cache::lock still guarantees
+# no two builds touch the SAME project at once; the two lanes only ever build DIFFERENT projects.
+# --timeout raised to 5400s (matches the jobs' own timeout) so a big first build is never SIGKILLed.
 ( while true; do php artisan queue:work --queue=default --tries=1 --sleep=2 --timeout=180 --max-time=3600 >> storage/logs/worker.log 2>&1; echo "[entrypoint] default worker exited; restarting in 2s" >> storage/logs/worker.log; sleep 2; done ) &
-( while true; do php artisan queue:work --queue=deploy --tries=1 --sleep=3 --timeout=3600 --max-time=7200 >> storage/logs/deploy.log 2>&1; echo "[entrypoint] deploy worker exited; restarting in 2s" >> storage/logs/deploy.log; sleep 2; done ) &
+for lane in 1 2; do
+  ( while true; do php artisan queue:work --queue=deploy --tries=1 --sleep=3 --timeout=5400 --max-time=10800 >> storage/logs/deploy.log 2>&1; echo "[entrypoint] deploy worker (lane $lane) exited; restarting in 2s" >> storage/logs/deploy.log; sleep 2; done ) &
+done
 
 # Scheduler (daily billing/dunning run), also supervised.
 ( while true; do php artisan schedule:work >> storage/logs/schedule.log 2>&1; sleep 2; done ) &

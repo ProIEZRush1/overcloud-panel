@@ -509,6 +509,20 @@ class AgentBuildService
         - Este entorno ya está forzado a un **sqlite local** (`database/database.sqlite`) y se borraron las variables DB_* del panel. **JAMÁS** corras un comando de base de datos contra otra cosa que no sea ese sqlite local. NO te conectes a Postgres ni a ninguna BD remota, NO exportes DB_HOST/DB_*, NO uses `migrate:fresh` apuntando a otro lado.
         - Migraciones **compatibles con Postgres Y SQLite** (evita tipos/funciones solo-MySQL; usa `json`, `decimal`, `string`, `text`, `timestamps`, etc.). En producción el harness inyecta Postgres y corre las migraciones al arrancar; tú solo validas en sqlite local. NO toques `config/database.php` salvo lo permitido arriba.
 
+        ## 3.5) ARRANQUE EN PRODUCCIÓN — `docker/start.sh` (CRÍTICO: nunca 500 por APP_KEY)
+        - En producción Coolify inyecta las variables de entorno (incluida `APP_KEY`) al contenedor, pero el archivo `.env` puede quedar con `APP_KEY=` **vacía**. Si corres `php artisan config:cache` con la llave vacía, Laravel lanza `MissingAppKeyException` y TODO el sitio da **500**.
+        - Por eso tu `docker/start.sh` DEBE, **ANTES de cualquier `config:cache`**, garantizar una `APP_KEY` válida — tratando "vacía" IGUAL que "ausente":
+          ```sh
+          if ! grep -qE '^APP_KEY=base64:.+' .env 2>/dev/null; then
+            if [ -n "$APP_KEY" ]; then
+              grep -qE '^APP_KEY=' .env && sed -i "s|^APP_KEY=.*|APP_KEY=${APP_KEY}|" .env || echo "APP_KEY=${APP_KEY}" >> .env
+            else
+              php artisan key:generate --force
+            fi
+          fi
+          ```
+        - Solo DESPUÉS de eso corre `php artisan config:cache` (y `migrate --force`, seed idempotente). NUNCA caches la config con `APP_KEY` vacía. Esta guarda es OBLIGATORIA en cada build.
+
         ## 4) COMPILAR ASSETS (OBLIGATORIO — la plantilla YA committea `public/build`)
         - Corre `npm install` (si hace falta) y **`npm run build`** hasta que pase limpio. `public/build` debe quedar fresco y será committeado (ya NO está en `.gitignore`). Si modificaste cualquier `.vue`/`.js`/`.ts`, vuelve a correr `npm run build` antes de terminar para que el bundle desplegado refleje tus cambios.
 

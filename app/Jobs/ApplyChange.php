@@ -25,12 +25,12 @@ class ApplyChange implements ShouldQueue
     use Queueable;
     use SerializesModels;
 
-    public int $timeout = 1800;
+    public int $timeout = 5400;
 
-    /** Survive a worker restart (deploys): retry a killed change instead of stranding the client. */
+    /** Survive a worker restart + a long wait in the queue: retry instead of stranding the client. */
     public function retryUntil(): \DateTimeInterface
     {
-        return now()->addMinutes(45);
+        return now()->addMinutes(120);
     }
 
     public function __construct(public int $projectId, public string $instruction) {}
@@ -44,7 +44,7 @@ class ApplyChange implements ShouldQueue
 
         // Serialize changes per project: if another change/deploy is in flight, retry shortly
         // (retryUntil keeps it alive) instead of two jobs racing the same repo + Coolify app.
-        $lock = Cache::lock('deploy-project:'.$this->projectId, 1800);
+        $lock = Cache::lock('deploy-project:'.$this->projectId, 5400);
         if (! $lock->get()) {
             $this->release(30);
 
